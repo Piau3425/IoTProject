@@ -20,6 +20,7 @@ env/
 backend/credentials.json
 backend/browser_contexts/
 backend/hostage_evidence/
+backend/.env.example
 .env
 .env.local
 *.key
