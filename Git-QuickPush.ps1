@@ -7,6 +7,17 @@ if (-not (Test-Path ".git")) {
     exit 1
 }
 
+# Check if origin remote exists
+$originUrl = git config --get remote.origin.url 2>$null
+if ([string]::IsNullOrWhiteSpace($originUrl)) {
+    Write-Host "[X] No 'origin' remote configured" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Run this first:" -ForegroundColor Yellow
+    Write-Host "   .\Setup-GitRemote.ps1" -ForegroundColor Yellow
+    Write-Host ""
+    exit 1
+}
+
 # 1. Run security check
 Write-Host "Security Check..." -ForegroundColor Cyan
 & "$PSScriptRoot\Check-GitSecurity.ps1"
