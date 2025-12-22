@@ -83,9 +83,12 @@
 | `HostageManager.tsx` | **人質管理器**。圖片上傳與預覽介面。 |
 | `PenaltyConfigPanel.tsx` | **懲罰設定面板**。開關各項感測器懲罰條件。 |
 | `StatusPanel.tsx` | 顯示硬體連線狀態與感測器數值。 |
-| `Timer.tsx` | 專注計時器與控制按鈕。 |
+| `Timer.tsx` | 專注計時器與控制按鈕。整合 `HostageManager` 進行人質管理。 |
 | `SensorChart.tsx` | 感測器數據圖表。 |
 | `SocialSettings.tsx` | 社交平台帳號設定介面。 |
+| `PenaltyProgress.tsx` | **懲罰執行進度**。顯示違規時的懲罰執行步驟與狀態。 |
+| `StateTransitionOverlay.tsx` | **狀態轉場疊加層**。提供硬體狀態切換時的視覺回饋。 |
+| `DevPanel.tsx` | **開發者面板**。模擬模式下的硬體控制介面。 |
 
 ---
 
@@ -93,4 +96,4 @@
 
 | 檔案 | 說明 |
 | :--- | :--- |
-| `main.cpp` | **韌體主程式**。包含狀態機邏輯、感測器讀取 (KY-033, LD2410, PN532)、LCD 顯示與 WebSocket Client 實作。 |
+| `main.cpp` | **韌體主程式** (ESP8266/D1 Mini)。包含狀態機邏輯、感測器讀取 (KY-033, LD2410, PN532)、LCD 顯示與 WebSocket Client 實作。 |

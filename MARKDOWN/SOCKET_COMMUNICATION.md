@@ -25,7 +25,7 @@
 
 ```
 ┌─────────────────────┐         ┌─────────────────────┐         ┌─────────────────────┐
-│   Frontend (React)  │         │  Backend (FastAPI)  │         │  Hardware (ESP32)   │
+│   Frontend (React)  │         │  Backend (FastAPI)  │         │ Hardware (ESP8266)  │
 │   Port: 5173        │◄────────┤  Port: 8000         │◄────────┤  WebSocket Client   │
 │                     │         │                     │         │                     │
 │  socket.io-client   │         │  python-socketio    │         │  Custom Protocol    │
@@ -299,7 +299,7 @@ socket.emit('mock_sensor_update', {
 }
 ```
 
-### Hardware (ESP32) → Server 事件
+### Hardware (ESP8266) → Server 事件
 
 硬體透過專用 WebSocket 連接至 `/ws/hardware`
 

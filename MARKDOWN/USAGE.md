@@ -8,15 +8,19 @@
 
 儀表板分為三個主要區塊：
 
-1. **左側控制區**:
+1. **左側控制區 (Timer & Controls)**:
     - **Timer**: 顯示剩餘時間、開始/暫停/停止按鈕。
+    - **Hostage Manager**: 嵌入於計時器下方，用於上傳與管理人質照片。
     - **Penalty Configuration**: 設定哪些違規行為會觸發懲罰。
     - **Social Settings**: 設定社交平台帳號。
-2. **右側狀態區**:
+2. **右側狀態區 (Status & Monitor)**:
     - **Status Panel**: 顯示硬體連線狀態、各感測器即時狀態 (Phone, Presence, Box, Noise)。
     - **Sensor Chart**: 即時繪製感測器數值波形圖。
-    - **Hostage Manager**: 管理人質照片。
-3. **頂部導覽列**:
+    - **Dev Panel** (僅模擬模式): 手動控制感測器狀態。
+3. **全局覆蓋層**:
+    - **Penalty Progress**: 違規時彈出，顯示懲罰執行進度 (Auth -> Upload -> Post)。
+    - **State Transition**: 硬體狀態切換時的全螢幕視覺提示。
+4. **頂部導覽列**:
     - **Mock Mode 開關**: 切換模擬模式/實體模式。
     - **連線狀態指示燈**: 顯示 WebSocket 連線狀況。
 
@@ -77,7 +81,7 @@
 
 ## 📸 人質管理 (Hostage Manager)
 
-位於儀表板右側或下方 Tab：
+位於左側 **Timer** 卡片下方：
 
 - **上傳**: 點擊或拖曳圖片至上傳區 (支援 JPG/PNG)。
 - **預覽**: 查看已上傳的圖片。

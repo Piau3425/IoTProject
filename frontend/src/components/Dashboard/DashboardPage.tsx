@@ -8,15 +8,14 @@ import { PenaltyProgress } from '@/components/Dashboard/PenaltyProgress'
 import { PenaltyConfigPanel } from '@/components/Dashboard/PenaltyConfigPanel'
 import { StateTransitionOverlay } from '@/components/Dashboard/StateTransitionOverlay'
 import { useAudio } from '@/hooks/useAudio'
-import { useEffect, useRef, useLayoutEffect } from 'react'
-import gsap from 'gsap'
+import { useEffect, useRef } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 
 export function Dashboard() {
   const {
     connected,
     systemState,
     hardwareStatus,
-    sensorHistory,
     penaltyTriggered,
     mockModeLoading,
     startSession,
@@ -28,31 +27,17 @@ export function Dashboard() {
     updatePenaltyConfig,
     sendManualSensorData,
   } = useSocket()
-  
+
   const { play } = useAudio()
   const warningPlayedRef = useRef(false)
-  const containerRef = useRef<HTMLDivElement>(null)
 
-  useLayoutEffect(() => {
-    const ctx = gsap.context(() => {
-      gsap.from(".dashboard-card", {
-        y: 50,
-        opacity: 0,
-        duration: 0.8,
-        stagger: 0.1,
-        ease: "back.out(1.7)",
-        clearProps: "all"
-      })
-    }, containerRef)
-    return () => ctx.revert()
-  }, [])
-
+  // Violation Warning Audio Logic
   useEffect(() => {
     if (systemState?.session?.status === 'ACTIVE') {
-      const isViolationState = 
-        systemState.phone_status === 'REMOVED' || 
+      const isViolationState =
+        systemState.phone_status === 'REMOVED' ||
         systemState.presence_status === 'AWAY'
-      
+
       if (isViolationState && !warningPlayedRef.current) {
         play('warning')
         warningPlayedRef.current = true
@@ -64,13 +49,41 @@ export function Dashboard() {
     }
   }, [systemState, play])
 
+  const containerVariants: import('framer-motion').Variants = {
+    hidden: { opacity: 0 },
+    show: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.1,
+        delayChildren: 0.2
+      }
+    }
+  }
+
+  const itemVariants: import('framer-motion').Variants = {
+    hidden: { opacity: 0, y: 30 },
+    show: {
+      opacity: 1,
+      y: 0,
+      transition: {
+        type: "spring",
+        stiffness: 50,
+        damping: 20
+      } as const
+    }
+  }
+
   return (
-    <div className="min-h-screen transition-all duration-1000">
-      {/* State Transition Overlay */}
-      <StateTransitionOverlay state={systemState?.hardware_state || 'IDLE'} />
+    <div className="min-h-screen bg-cyber-bg text-cyber-text selection:bg-neon-blue/30 relative">
+      <div className="absolute inset-0 bg-grid-pattern pointer-events-none z-0" />
+
+      <AnimatePresence>
+        {/* State Transition Overlay */}
+        <StateTransitionOverlay state={systemState?.hardware_state || 'IDLE'} />
+      </AnimatePresence>
 
       {/* Penalty Progress Modal */}
-      <PenaltyProgress 
+      <PenaltyProgress
         isExecuting={penaltyTriggered}
         currentStep={penaltyTriggered ? 'auth' : undefined}
       />
@@ -85,68 +98,59 @@ export function Dashboard() {
       />
 
       {/* Main Dashboard */}
-      <main ref={containerRef} className="container mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left Column - Timer & Settings */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Main Timer */}
-            <div className="dashboard-card">
-              <Timer
-                session={systemState?.session || null}
-                onStart={startSession}
-                onStop={stopSession}
-                onPause={pauseSession}
-                onResume={resumeSession}
-                penaltyTriggered={penaltyTriggered}
-                prepareRemainingMs={systemState?.prepare_remaining_ms || 0}
-              />
-            </div>
+      <motion.main
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+        className="container mx-auto px-4 py-8"
+      >
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-            {/* Penalty Configuration Panel - NEW in v2.0 */}
-            <div className="dashboard-card">
-              <PenaltyConfigPanel
-                config={systemState?.penalty_config || {
-                  enable_phone_penalty: true,
-                  enable_presence_penalty: true,
-                  enable_noise_penalty: false,
-                  enable_box_open_penalty: true,
-                  noise_threshold_db: 70
-                }}
-                onConfigChange={updatePenaltyConfig}
-                isSessionActive={systemState?.session?.status === 'ACTIVE'}
-              />
-            </div>
+          {/* Left Column - Main Timer (Larger) */}
+          <motion.div variants={itemVariants} className="lg:col-span-8 space-y-6">
+            <Timer
+              session={systemState?.session || null}
+              onStart={startSession}
+              onStop={stopSession}
+              onPause={pauseSession}
+              onResume={resumeSession}
+              penaltyTriggered={penaltyTriggered}
+              prepareRemainingMs={systemState?.prepare_remaining_ms || 0}
+            />
 
-            {/* Social Settings */}
-            <div className="dashboard-card">
-              <SocialSettings
-                settings={systemState?.penalty_settings || {
-                  enabled_platforms: [],
-                  custom_messages: {},
-                  gmail_recipients: [],
-                  include_timestamp: true,
-                  include_violation_count: true,
-                }}
-                onSave={updatePenaltySettings}
-              />
-            </div>
-          </div>
-
-          {/* Right Column - Status & Sensors & Dev */}
-          <div className="space-y-6">
-            {/* Developer Panel - Only show in mock mode */}
-            {hardwareStatus.mock_mode && (
-              <div className="dashboard-card">
-                <DevPanel
-                  onManualControl={sendManualSensorData}
-                  isVisible={hardwareStatus.mock_mode}
-                  mockState={hardwareStatus.mock_state}
+            {/* Split Row for Settings */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <motion.div variants={itemVariants}>
+                <PenaltyConfigPanel
+                  config={systemState?.penalty_config || {
+                    enable_phone_penalty: true,
+                    enable_presence_penalty: true,
+                    enable_noise_penalty: false,
+                    enable_box_open_penalty: true,
+                    noise_threshold_db: 70
+                  }}
+                  onConfigChange={updatePenaltyConfig}
+                  isSessionActive={systemState?.session?.status === 'ACTIVE'}
                 />
-              </div>
-            )}
+              </motion.div>
+              <motion.div variants={itemVariants}>
+                <SocialSettings
+                  settings={systemState?.penalty_settings || {
+                    enabled_platforms: [],
+                    custom_messages: {},
+                    gmail_recipients: [],
+                    include_timestamp: true,
+                    include_violation_count: true,
+                  }}
+                  onSave={updatePenaltySettings}
+                />
+              </motion.div>
+            </div>
+          </motion.div>
 
-            {/* Status Panel */}
-            <div className="dashboard-card">
+          {/* Right Column - Status/Dev */}
+          <motion.div variants={itemVariants} className="lg:col-span-4 space-y-6 flex flex-col h-full">
+            <div className="flex-1 min-h-[500px]">
               <StatusPanel
                 phoneStatus={systemState?.phone_status || 'UNKNOWN'}
                 presenceStatus={systemState?.presence_status || 'UNKNOWN'}
@@ -158,32 +162,49 @@ export function Dashboard() {
                 nfcDetected={hardwareStatus.nfc_detected}
                 ldrDetected={hardwareStatus.ldr_detected}
                 radarDetected={hardwareStatus.radar_detected}
-                // v1.0: New state props
                 hardwareState={systemState?.hardware_state || 'IDLE'}
                 prepareRemainingMs={systemState?.prepare_remaining_ms || 0}
                 irDetected={hardwareStatus.ir_detected}
                 lcdDetected={hardwareStatus.lcd_detected}
               />
             </div>
-          </div>
+
+          </motion.div>
+
         </div>
 
+        {/* Developer Panel - Overlay - Only show in mock mode */}
+        <AnimatePresence>
+          {hardwareStatus.mock_mode && (
+            <DevPanel
+              onManualControl={sendManualSensorData}
+              isVisible={hardwareStatus.mock_mode}
+              mockState={hardwareStatus.mock_state}
+            />
+          )}
+        </AnimatePresence>
+
         {/* Footer */}
-        <footer className="mt-12 text-center text-xs text-mac-textSecondary border-t border-white/10 pt-6 animate-fade-in" style={{ animationDelay: '0.3s' }}>
-          <p className="flex items-center justify-center gap-2 transition-all duration-300 hover:scale-105">
-            <span className="inline-block w-2 h-2 rounded-full bg-neon-red animate-pulse-glow" />
-            <span className="font-semibold text-white">專注執法者</span> 
-            <span>v1.0</span> 
-            <span className="mx-2">|</span>
-            <span>零信任監控系統</span> 
-            <span className="mx-2">|</span>
-            <span className="text-neon-green">社死協定已啟動</span>
-          </p>
-          <p className="mt-2 text-mac-textSecondary/70 italic transition-all duration-300 hover:text-mac-textSecondary">
-            「以問責達成紀律，以恐懼達成專注。」
-          </p>
-        </footer>
-      </main>
+        <motion.footer
+          variants={itemVariants}
+          className="mt-16 text-center text-xs text-cyber-muted border-t border-white/5 pt-8"
+        >
+          <div className="flex flex-col items-center gap-4">
+            <p className="flex items-center justify-center gap-3 transition-all duration-300 hover:scale-105">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-neon-red animate-pulse" />
+              <span className="font-bold tracking-widest text-white uppercase">專注執法者</span>
+              <span className="px-1.5 py-0.5 rounded bg-white/10 text-[10px] font-mono">v2.0</span>
+              <span className="text-white/20">|</span>
+              <span className="font-light tracking-wider">零信任專注協定</span>
+              <span className="text-white/20">|</span>
+              <span className="text-neon-green font-mono text-[10px]">社交懲罰機制已啟動</span>
+            </p>
+            <p className="text-white/30 italic hover:text-white/50 transition-colors">
+              「以問責達成紀律，以恐懼達成專注。」
+            </p>
+          </div>
+        </motion.footer>
+      </motion.main>
     </div>
   )
 }

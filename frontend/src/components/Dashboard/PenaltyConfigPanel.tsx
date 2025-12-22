@@ -2,14 +2,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
-import { 
-  Smartphone, 
-  User, 
-  Volume2, 
+import {
+  Smartphone,
+  User,
+  Volume2,
   Box,
-  Shield
 } from 'lucide-react'
 import { PenaltyConfig } from '@/hooks/useSocket'
+import { PenaltyIcon } from '@/components/Icons'
 
 interface PenaltyConfigPanelProps {
   config: PenaltyConfig
@@ -17,12 +17,12 @@ interface PenaltyConfigPanelProps {
   isSessionActive?: boolean
 }
 
-export function PenaltyConfigPanel({ 
-  config, 
+export function PenaltyConfigPanel({
+  config,
   onConfigChange,
-  isSessionActive = false 
+  isSessionActive = false
 }: PenaltyConfigPanelProps) {
-  
+
   const handleToggle = (key: keyof PenaltyConfig, value: boolean) => {
     onConfigChange({
       ...config,
@@ -80,7 +80,7 @@ export function PenaltyConfigPanel({
     <Card className="mac-card border-white/10">
       <CardHeader className="pb-3">
         <CardTitle className="text-base font-medium flex items-center gap-2">
-          <Shield className="w-5 h-5 text-neon-red" />
+          <PenaltyIcon className="w-5 h-5 text-neon-red" />
           <span>懲罰感測器配置</span>
           {isSessionActive && (
             <span className="text-xs px-2 py-0.5 bg-neon-red/20 text-neon-red rounded-full ml-auto">
@@ -93,21 +93,20 @@ export function PenaltyConfigPanel({
         <p className="text-xs text-mac-textSecondary mb-4">
           選擇哪些感測器違規會觸發社死懲罰。未選取的感測器仍會顯示狀態，但不會觸發懲罰。
         </p>
-        
+
         <div className="space-y-3">
           {penalties.map((penalty) => {
             const Icon = penalty.icon
             const isRequired = penalty.required
             const isDisabled = isSessionActive || isRequired
-            
+
             return (
-              <div 
+              <div
                 key={penalty.id}
-                className={`flex items-center justify-between p-3 rounded-lg transition-all duration-200 ${
-                  penalty.enabled 
-                    ? `bg-white/5 border ${isRequired ? 'border-neon-green/50' : 'border-white/10'}` 
-                    : 'bg-transparent border border-transparent opacity-60'
-                } ${isDisabled && !isRequired ? 'pointer-events-none' : isRequired ? '' : 'hover:bg-white/5'}`}
+                className={`flex items-center justify-between p-3 rounded-lg transition-all duration-200 ${penalty.enabled
+                  ? `bg-white/5 border ${isRequired ? 'border-neon-green/50' : 'border-white/10'}`
+                  : 'bg-transparent border border-transparent opacity-60'
+                  } ${isDisabled && !isRequired ? 'pointer-events-none' : isRequired ? '' : 'hover:bg-white/5'}`}
               >
                 <div className="flex items-center gap-3">
                   <div className={`p-2 rounded-lg ${penalty.enabled ? 'bg-white/10' : 'bg-white/5'}`}>
@@ -115,8 +114,8 @@ export function PenaltyConfigPanel({
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <Label 
-                        htmlFor={penalty.id} 
+                      <Label
+                        htmlFor={penalty.id}
                         className={`font-medium ${isRequired ? 'cursor-default' : 'cursor-pointer'} ${penalty.enabled ? 'text-white' : 'text-gray-400'}`}
                       >
                         {penalty.label}

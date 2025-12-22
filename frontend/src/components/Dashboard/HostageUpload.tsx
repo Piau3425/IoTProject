@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+// import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { ImageIcon, Upload, X, AlertTriangle, Shield } from 'lucide-react'
 
@@ -46,7 +46,7 @@ export function HostageUpload({ onFileSelect, selectedFile, disabled }: HostageU
     e.preventDefault()
     e.stopPropagation()
     setDragActive(false)
-    
+
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       handleFile(e.dataTransfer.files[0])
     }
@@ -76,13 +76,13 @@ export function HostageUpload({ onFileSelect, selectedFile, disabled }: HostageU
           上傳一張尷尬照片作為人質，違規時將被公開處刑
         </p>
       </div>
-      
+
       <div>
         {!selectedFile ? (
           <div
             className={`relative border-2 border-dashed rounded-xl p-6 transition-all cursor-pointer
-              ${dragActive 
-                ? 'border-neon-purple bg-neon-purple/10 scale-105' 
+              ${dragActive
+                ? 'border-neon-purple bg-neon-purple/10 scale-105'
                 : 'border-white/20 hover:border-neon-purple/50 hover:bg-white/5'
               }
               ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
@@ -119,9 +119,9 @@ export function HostageUpload({ onFileSelect, selectedFile, disabled }: HostageU
           <div className="relative animate-scale-in">
             <div className="relative rounded-xl overflow-hidden border-2 border-neon-red/50 shadow-glow-red">
               {previewUrl && (
-                <img 
-                  src={previewUrl} 
-                  alt="人質預覽" 
+                <img
+                  src={previewUrl}
+                  alt="人質預覽"
                   className="w-full h-36 object-cover"
                 />
               )}

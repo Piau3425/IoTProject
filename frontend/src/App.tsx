@@ -1,19 +1,28 @@
 import { Dashboard } from '@/components/Dashboard/DashboardPage'
 import { SmoothScroll } from '@/components/ui/SmoothScroll'
-import { CustomCursor } from '@/components/Landing/CustomCursor'
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { AdvancedCursor } from '@/components/ui/AdvancedCursor'
+import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom'
+import { AnimatePresence } from 'framer-motion'
+
+const AnimatedRoutes = () => {
+  const location = useLocation()
+
+  return (
+    <AnimatePresence mode="wait">
+      <Routes location={location} key={location.pathname}>
+        <Route path="/" element={<Dashboard />} />
+      </Routes>
+    </AnimatePresence>
+  )
+}
 
 function App() {
   return (
-    <>
-      <CustomCursor />
+    <BrowserRouter>
+      <AdvancedCursor />
       <SmoothScroll />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-        </Routes>
-      </BrowserRouter>
-    </>
+      <AnimatedRoutes />
+    </BrowserRouter>
   )
 }
 

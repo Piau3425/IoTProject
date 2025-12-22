@@ -1,12 +1,12 @@
-import { useEffect, useRef, RefObject } from 'react';
+import { useEffect, RefObject } from 'react';
 import gsap from 'gsap';
-import { EASES, ANIMATION_CONFIG } from '@/lib/animation';
+// import { EASES, ANIMATION_CONFIG } from '@/lib/animation';
 
-interface PhysicsConfig {
-  damping?: number;
-  stiffness?: number;
-  mass?: number;
-}
+// interface PhysicsConfig {
+//   damping?: number;
+//   stiffness?: number;
+//   mass?: number;
+// }
 
 /**
  * Simulates a physical spring interaction for hover/active states.
@@ -14,8 +14,8 @@ interface PhysicsConfig {
  */
 export const useSpring = (
   ref: RefObject<HTMLElement>,
-  options: { 
-    scale?: number; 
+  options: {
+    scale?: number;
     active?: boolean;
     stiffness?: number; // 0-1, higher is stiffer
   } = { scale: 0.95, active: true, stiffness: 0.5 }
@@ -88,7 +88,7 @@ export const useMagnetic = (
       const rect = element.getBoundingClientRect();
       const centerX = rect.left + rect.width / 2;
       const centerY = rect.top + rect.height / 2;
-      
+
       // Calculate distance from center
       const distanceX = e.clientX - centerX;
       const distanceY = e.clientY - centerY;
@@ -164,7 +164,7 @@ export const useStaggerEntrance = (
 ) => {
   useEffect(() => {
     if (!containerRef.current) return;
-    
+
     const ctx = gsap.context(() => {
       gsap.from(selector, {
         y: 30,
