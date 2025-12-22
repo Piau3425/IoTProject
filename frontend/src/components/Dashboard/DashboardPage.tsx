@@ -2,13 +2,14 @@ import { useSocket } from '@/hooks/useSocket'
 import { Header } from '@/components/Dashboard/Header'
 import { Timer } from '@/components/Dashboard/Timer'
 import { StatusPanel } from '@/components/Dashboard/StatusPanel'
-import { SensorChart } from '@/components/Dashboard/SensorChart'
 import { SocialSettings } from '@/components/Dashboard/SocialSettings'
 import { DevPanel } from '@/components/Dashboard/DevPanel'
 import { PenaltyProgress } from '@/components/Dashboard/PenaltyProgress'
 import { PenaltyConfigPanel } from '@/components/Dashboard/PenaltyConfigPanel'
+import { StateTransitionOverlay } from '@/components/Dashboard/StateTransitionOverlay'
 import { useAudio } from '@/hooks/useAudio'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useLayoutEffect } from 'react'
+import gsap from 'gsap'
 
 export function Dashboard() {
   const {
@@ -30,6 +31,21 @@ export function Dashboard() {
   
   const { play } = useAudio()
   const warningPlayedRef = useRef(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const ctx = gsap.context(() => {
+      gsap.from(".dashboard-card", {
+        y: 50,
+        opacity: 0,
+        duration: 0.8,
+        stagger: 0.1,
+        ease: "back.out(1.7)",
+        clearProps: "all"
+      })
+    }, containerRef)
+    return () => ctx.revert()
+  }, [])
 
   useEffect(() => {
     if (systemState?.session?.status === 'ACTIVE') {
@@ -49,7 +65,10 @@ export function Dashboard() {
   }, [systemState, play])
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-mac-bg via-mac-surface to-mac-bg transition-all duration-1000">
+    <div className="min-h-screen transition-all duration-1000">
+      {/* State Transition Overlay */}
+      <StateTransitionOverlay state={systemState?.hardware_state || 'IDLE'} />
+
       {/* Penalty Progress Modal */}
       <PenaltyProgress 
         isExecuting={penaltyTriggered}
@@ -66,84 +85,86 @@ export function Dashboard() {
       />
 
       {/* Main Dashboard */}
-      <main className="container mx-auto px-4 py-8">
+      <main ref={containerRef} className="container mx-auto px-4 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left Column - Timer & Settings */}
-          <div className="lg:col-span-2 space-y-6 animate-slide-up" style={{ animationDelay: '0.1s' }}>
+          <div className="lg:col-span-2 space-y-6">
             {/* Main Timer */}
-            <Timer
-              session={systemState?.session || null}
-              onStart={startSession}
-              onStop={stopSession}
-              onPause={pauseSession}
-              onResume={resumeSession}
-              penaltyTriggered={penaltyTriggered}
-              prepareRemainingMs={systemState?.prepare_remaining_ms || 0}
-            />
+            <div className="dashboard-card">
+              <Timer
+                session={systemState?.session || null}
+                onStart={startSession}
+                onStop={stopSession}
+                onPause={pauseSession}
+                onResume={resumeSession}
+                penaltyTriggered={penaltyTriggered}
+                prepareRemainingMs={systemState?.prepare_remaining_ms || 0}
+              />
+            </div>
 
             {/* Penalty Configuration Panel - NEW in v2.0 */}
-            <PenaltyConfigPanel
-              config={systemState?.penalty_config || {
-                enable_phone_penalty: true,
-                enable_presence_penalty: true,
-                enable_noise_penalty: false,
-                enable_box_open_penalty: true,
-                noise_threshold_db: 70
-              }}
-              onConfigChange={updatePenaltyConfig}
-              isSessionActive={systemState?.session?.status === 'ACTIVE'}
-            />
+            <div className="dashboard-card">
+              <PenaltyConfigPanel
+                config={systemState?.penalty_config || {
+                  enable_phone_penalty: true,
+                  enable_presence_penalty: true,
+                  enable_noise_penalty: false,
+                  enable_box_open_penalty: true,
+                  noise_threshold_db: 70
+                }}
+                onConfigChange={updatePenaltyConfig}
+                isSessionActive={systemState?.session?.status === 'ACTIVE'}
+              />
+            </div>
 
             {/* Social Settings */}
-            <SocialSettings
-              settings={systemState?.penalty_settings || {
-                enabled_platforms: [],
-                custom_messages: {},
-                gmail_recipients: [],
-                include_timestamp: true,
-                include_violation_count: true,
-              }}
-              onSave={updatePenaltySettings}
-            />
+            <div className="dashboard-card">
+              <SocialSettings
+                settings={systemState?.penalty_settings || {
+                  enabled_platforms: [],
+                  custom_messages: {},
+                  gmail_recipients: [],
+                  include_timestamp: true,
+                  include_violation_count: true,
+                }}
+                onSave={updatePenaltySettings}
+              />
+            </div>
           </div>
 
           {/* Right Column - Status & Sensors & Dev */}
-          <div className="space-y-6 animate-slide-up" style={{ animationDelay: '0.2s' }}>
+          <div className="space-y-6">
             {/* Developer Panel - Only show in mock mode */}
             {hardwareStatus.mock_mode && (
-              <DevPanel
-                onManualControl={sendManualSensorData}
-                isVisible={hardwareStatus.mock_mode}
-                mockState={hardwareStatus.mock_state}
-              />
+              <div className="dashboard-card">
+                <DevPanel
+                  onManualControl={sendManualSensorData}
+                  isVisible={hardwareStatus.mock_mode}
+                  mockState={hardwareStatus.mock_state}
+                />
+              </div>
             )}
 
             {/* Status Panel */}
-            <StatusPanel
-              phoneStatus={systemState?.phone_status || 'UNKNOWN'}
-              presenceStatus={systemState?.presence_status || 'UNKNOWN'}
-              boxStatus={systemState?.box_status || 'UNKNOWN'}
-              currentDb={systemState?.current_db || 40}
-              hardwareConnected={hardwareStatus.connected}
-              isMock={hardwareStatus.mock_mode}
-              hardwareBoard={hardwareStatus.board || 'D1-mini'}
-              nfcDetected={hardwareStatus.nfc_detected}
-              ldrDetected={hardwareStatus.ldr_detected}
-              radarDetected={hardwareStatus.radar_detected}
-              // v1.0: New state props
-              hardwareState={systemState?.hardware_state || 'IDLE'}
-              prepareRemainingMs={systemState?.prepare_remaining_ms || 0}
-              hallDetected={hardwareStatus.hall_detected}
-              lcdDetected={hardwareStatus.lcd_detected}
-            />
-
-            {/* Sensor Charts */}
-            <SensorChart 
-              data={sensorHistory}
-              nfcDetected={hardwareStatus.nfc_detected}
-              ldrDetected={hardwareStatus.ldr_detected}
-              hardwareConnected={hardwareStatus.connected}
-            />
+            <div className="dashboard-card">
+              <StatusPanel
+                phoneStatus={systemState?.phone_status || 'UNKNOWN'}
+                presenceStatus={systemState?.presence_status || 'UNKNOWN'}
+                boxStatus={systemState?.box_status || 'UNKNOWN'}
+                currentDb={systemState?.current_db || 40}
+                hardwareConnected={hardwareStatus.connected}
+                isMock={hardwareStatus.mock_mode}
+                hardwareBoard={hardwareStatus.board || 'D1-mini'}
+                nfcDetected={hardwareStatus.nfc_detected}
+                ldrDetected={hardwareStatus.ldr_detected}
+                radarDetected={hardwareStatus.radar_detected}
+                // v1.0: New state props
+                hardwareState={systemState?.hardware_state || 'IDLE'}
+                prepareRemainingMs={systemState?.prepare_remaining_ms || 0}
+                irDetected={hardwareStatus.ir_detected}
+                lcdDetected={hardwareStatus.lcd_detected}
+              />
+            </div>
           </div>
         </div>
 

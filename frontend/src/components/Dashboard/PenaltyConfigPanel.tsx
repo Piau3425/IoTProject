@@ -44,23 +44,8 @@ export function PenaltyConfigPanel({
       description: 'NFC 偵測手機移除',
       icon: Smartphone,
       color: 'text-blue-400',
-      enabled: config.enable_phone_penalty
-    },
-    {
-      id: 'enable_presence_penalty',
-      label: '人員在座',
-      description: '雷達偵測離座',
-      icon: User,
-      color: 'text-green-400',
-      enabled: config.enable_presence_penalty
-    },
-    {
-      id: 'enable_noise_penalty',
-      label: '環境安靜',
-      description: '麥克風偵測噪音',
-      icon: Volume2,
-      color: 'text-yellow-400',
-      enabled: config.enable_noise_penalty
+      enabled: true,
+      required: true
     },
     {
       id: 'enable_box_open_penalty',
@@ -68,7 +53,26 @@ export function PenaltyConfigPanel({
       description: 'LDR 偵測開蓋',
       icon: Box,
       color: 'text-purple-400',
-      enabled: config.enable_box_open_penalty
+      enabled: true,
+      required: true
+    },
+    {
+      id: 'enable_presence_penalty',
+      label: '人員在座',
+      description: '雷達偵測離座',
+      icon: User,
+      color: 'text-green-400',
+      enabled: config.enable_presence_penalty,
+      required: false
+    },
+    {
+      id: 'enable_noise_penalty',
+      label: '環境安靜',
+      description: '麥克風偵測噪音',
+      icon: Volume2,
+      color: 'text-yellow-400',
+      enabled: config.enable_noise_penalty,
+      required: false
     }
   ]
 
@@ -93,26 +97,36 @@ export function PenaltyConfigPanel({
         <div className="space-y-3">
           {penalties.map((penalty) => {
             const Icon = penalty.icon
+            const isRequired = penalty.required
+            const isDisabled = isSessionActive || isRequired
+            
             return (
               <div 
                 key={penalty.id}
                 className={`flex items-center justify-between p-3 rounded-lg transition-all duration-200 ${
                   penalty.enabled 
-                    ? 'bg-white/5 border border-white/10' 
+                    ? `bg-white/5 border ${isRequired ? 'border-neon-green/50' : 'border-white/10'}` 
                     : 'bg-transparent border border-transparent opacity-60'
-                } ${isSessionActive ? 'pointer-events-none' : 'hover:bg-white/5'}`}
+                } ${isDisabled && !isRequired ? 'pointer-events-none' : isRequired ? '' : 'hover:bg-white/5'}`}
               >
                 <div className="flex items-center gap-3">
                   <div className={`p-2 rounded-lg ${penalty.enabled ? 'bg-white/10' : 'bg-white/5'}`}>
                     <Icon className={`w-4 h-4 ${penalty.enabled ? penalty.color : 'text-gray-500'}`} />
                   </div>
                   <div>
-                    <Label 
-                      htmlFor={penalty.id} 
-                      className={`font-medium cursor-pointer ${penalty.enabled ? 'text-white' : 'text-gray-400'}`}
-                    >
-                      {penalty.label}
-                    </Label>
+                    <div className="flex items-center gap-2">
+                      <Label 
+                        htmlFor={penalty.id} 
+                        className={`font-medium ${isRequired ? 'cursor-default' : 'cursor-pointer'} ${penalty.enabled ? 'text-white' : 'text-gray-400'}`}
+                      >
+                        {penalty.label}
+                      </Label>
+                      {isRequired && (
+                        <span className="text-xs px-2 py-0.5 bg-neon-green/20 text-neon-green rounded-full">
+                          必要
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-mac-textSecondary">{penalty.description}</p>
                   </div>
                 </div>
@@ -120,7 +134,7 @@ export function PenaltyConfigPanel({
                   id={penalty.id}
                   checked={penalty.enabled}
                   onCheckedChange={(checked) => handleToggle(penalty.id as keyof PenaltyConfig, checked)}
-                  disabled={isSessionActive}
+                  disabled={isDisabled}
                   className="data-[state=checked]:bg-neon-green"
                 />
               </div>

@@ -10,7 +10,7 @@
  * 
  * v1.0 核心功能：
  * - 狀態機架構: IDLE → PREPARING (10s) → FOCUSING → PAUSED/VIOLATION
- * - 霍爾感測器中斷偵測 (盒蓋磁鐵開關)
+ * - KY-033 紅外線反射式感測器中斷偵測 (盒蓋開關偵測)
  * - 1602 I2C LCD 即時狀態顯示
  * - LD2410 mmWave 雷達人體偵測
  * 
@@ -23,19 +23,29 @@
  * │                   │ VCC        │ 5V      │ -     │ 需 5V 供電            │
  * │                   │ GND        │ GND     │ -     │                       │
  * ├──────────────────────────────────────────────────────────────────────────┤
- * │ 霍爾感測器        │ OUT        │ D3      │ GPIO0 │ 中斷腳位 (FALLING)    │
+ * │ 紅外線感測器      │ DO         │ D3      │ GPIO0 │ 中斷腳位 (CHANGE)     │
  * │ (KY-033)          │ VCC        │ 3V3     │ -     │ 3.3V 供電             │
- * │                   │ GND        │ GND     │ -     │ 磁鐵靠近=LOW          │
+ * │                   │ GND        │ GND     │ -     │ 反射面=LOW            │
  * ├──────────────────────────────────────────────────────────────────────────┤
  * │ LD2410 mmWave     │ TX         │ D5      │ GPIO14│ SoftwareSerial RX     │
  * │                   │ RX         │ D6      │ GPIO12│ SoftwareSerial TX     │
  * │                   │ VCC        │ 5V      │ -     │ 需 5V 供電            │
  * │                   │ GND        │ GND     │ -     │                       │
+ * ├──────────────────────────────────────────────────────────────────────────┤
+ * │ 聲音感測器        │ AO         │ A0      │ ADC0  │ 類比輸入              │
+ * │ (MAX9418)         │ VCC        │ 3V3/5V  │ -     │                       │
+ * │                   │ GND        │ GND     │ -     │                       │
+ * ├──────────────────────────────────────────────────────────────────────────┤
+ * │ PN532 NFC 模組    │ SDA        │ D2      │ GPIO4 │ I2C 資料線 (共用)     │
+ * │ (I2C 模式)        │ SCL        │ D1      │ GPIO5 │ I2C 時脈線 (共用)     │
+ * │                   │ VCC        │ 3V3/5V  │ -     │                       │
+ * │                   │ GND        │ GND     │ -     │                       │
  * └──────────────────────────────────────────────────────────────────────────┘
  * 
- * 【霍爾感測器邏輯】
- * - 磁鐵靠近 (盒蓋關閉): OUT = LOW  → 正常狀態
- * - 磁鐵遠離 (盒蓋開啟): OUT = HIGH → 觸發違規
+ * 【KY-033 紅外線感測器邏輯】
+ * - 偵測到反射面 (盒蓋關閉): DO = LOW  → 正常狀態
+ * - 無反射/距離過遠 (盒蓋開啟): DO = HIGH → 觸發違規
+ * - 有效偵測距離: 2~30mm (可透過電位器調整)
  * - 使用中斷偵測，確保即時響應
  * 
  * 【狀態機說明】
@@ -59,6 +69,7 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <SoftwareSerial.h>
+#include <Adafruit_PN532.h>
 
 // ============================================================================
 // 版本資訊
@@ -86,12 +97,19 @@ const char* WS_PATH = "/ws/hardware";
 #define PIN_I2C_SDA     D2      // GPIO4  - I2C 資料線
 #define PIN_I2C_SCL     D1      // GPIO5  - I2C 時脈線
 
-// 霍爾感測器 (中斷)
-#define PIN_HALL        D3      // GPIO0  - 霍爾感測器輸出 (中斷)
+// KY-033 紅外線感測器 (反射式, 中斷)
+#define PIN_HALL        D3      // GPIO0  - KY-033 數位輸出 (DO) - 中斷腳位
 
 // LD2410 mmWave 雷達 (SoftwareSerial)
 #define PIN_RADAR_RX    D5      // GPIO14 - 雷達 TX → D1 RX
 #define PIN_RADAR_TX    D6      // GPIO12 - 雷達 RX ← D1 TX
+
+// MAX9418 聲音感測器
+#define PIN_MIC         A0      // ADC0 - 類比輸入
+
+// PN532 NFC 設定 (I2C)
+#define PN532_IRQ       (2)     // 這裡暫不使用 IRQ，採輪詢模式
+#define PN532_RESET     (3)     // 這裡暫不使用 RESET
 
 // ============================================================================
 // LCD 設定
@@ -125,7 +143,7 @@ const char* STATE_NAMES[] = {
 #define LCD_UPDATE_INTERVAL_MS  250     // LCD 更新間隔: 250ms (4Hz)
 #define HEARTBEAT_INTERVAL_MS   5000    // 心跳間隔: 5 秒
 #define WIFI_RECONNECT_TIMEOUT  30000   // WiFi 重連超時: 30 秒
-#define HALL_DEBOUNCE_MS        50      // 霍爾感測器防抖動: 50ms
+#define IR_DEBOUNCE_MS          50      // 紅外線感測器防抖動: 50ms
 
 // ============================================================================
 // 雷達防抖動設定
@@ -142,10 +160,10 @@ unsigned long focusStartTime = 0;           // 專注開始時間
 unsigned long totalFocusTime = 0;           // 累計專注時間
 
 // ============================================================================
-// 全域變數 - 霍爾感測器 (中斷相關)
+// 全域變數 - KY-033 紅外線感測器 (中斷相關)
 // ============================================================================
-volatile bool hallTriggered = false;        // 中斷觸發旗標
-volatile unsigned long hallTriggerTime = 0; // 觸發時間
+volatile bool irTriggered = false;          // 中斷觸發旗標
+volatile unsigned long irTriggerTime = 0;   // 觸發時間
 bool boxOpen = false;                       // 盒蓋狀態 (true = 開啟)
 
 // ============================================================================
@@ -154,6 +172,17 @@ bool boxOpen = false;                       // 盒蓋狀態 (true = 開啟)
 bool radarPresence = false;                 // 雷達偵測到人體
 bool radarRawReading = false;               // 原始雷達讀數
 unsigned long radarLowStartTime = 0;        // 開始偵測到無人的時間
+
+// ============================================================================
+// 全域變數 - 聲音偵測
+// ============================================================================
+int micDb = 40;                             // 當前分貝值 (預設 40dB)
+
+// ============================================================================
+// 全域變數 - NFC 偵測
+// ============================================================================
+bool nfcDetected = false;                   // 是否偵測到 NFC 標籤
+String nfcId = "";                          // 偵測到的 NFC ID
 
 // ============================================================================
 // 全域變數 - 網路與連線
@@ -171,6 +200,7 @@ unsigned long wifiReconnectStart = 0;
 WebSocketsClient webSocket;
 LiquidCrystal_I2C lcd(LCD_ADDR, LCD_COLS, LCD_ROWS);
 SoftwareSerial radarSerial(PIN_RADAR_RX, PIN_RADAR_TX);
+Adafruit_PN532 nfc(PIN_I2C_SDA, PIN_I2C_SCL);
 
 // ============================================================================
 // 函式前向宣告
@@ -178,8 +208,10 @@ SoftwareSerial radarSerial(PIN_RADAR_RX, PIN_RADAR_TX);
 // 初始化函式
 void initHardware();
 void initLCD();
-void initHallSensor();
+void initIRSensor();     // KY-033 紅外線感測器初始化
 void initRadar();
+void initMic();          // MAX9418 聲音感測器初始化
+void initNFC();          // PN532 NFC 初始化
 void initWiFi();
 void initWebSocket();
 
@@ -195,7 +227,9 @@ void handleViolationState();
 // 感測器讀取函式
 void readSensors();
 void readRadar();
-void processHallInterrupt();
+void readMic();          // 讀取聲音感測器
+void readNFC();          // 讀取 NFC
+void processIRInterrupt();
 
 // 顯示函式
 void updateLCD();
@@ -215,7 +249,7 @@ void handleCommand(const char* payload);
 
 // 工具函式
 String formatTime(unsigned long ms);
-void IRAM_ATTR hallISR();
+void IRAM_ATTR irISR();
 
 // ============================================================================
 // setup() - 系統初始化
@@ -274,8 +308,8 @@ void loop() {
         webSocket.begin(WS_HOST, WS_PORT, WS_PATH);
     }
     
-    // 處理霍爾感測器中斷
-    processHallInterrupt();
+    // 處理紅外線感測器中斷
+    processIRInterrupt();
     
     // 感測器讀取 (10Hz)
     if (currentMillis - lastSensorRead >= SENSOR_INTERVAL_MS) {
@@ -307,8 +341,10 @@ void initHardware() {
     Serial.println(F("[HW] Initializing hardware..."));
     
     initLCD();
-    initHallSensor();
+    initIRSensor();  // KY-033 紅外線感測器
     initRadar();
+    initMic();       // MAX9418 聲音感測器
+    initNFC();       // PN532 NFC 模組
     
     Serial.println(F("[HW] ✓ All hardware initialized"));
 }
@@ -336,23 +372,29 @@ void initLCD() {
 }
 
 // ============================================================================
-// initHallSensor() - 初始化霍爾感測器 KY-033 (中斷模式)
+// initIRSensor() - 初始化 KY-033 紅外線感測器 (中斷模式)
+// 說明: KY-033 是紅外線反射式感測器，常用於循跡或避障
+//      - 白色/反光表面: 反射紅外線 → DO 輸出 LOW
+//      - 黑色/吸光表面: 吸收紅外線 → DO 輸出 HIGH
+//      - 本專案用於偵測盒蓋: 蓋子關閉時反射面靠近 = LOW (正常)
+//                             蓋子開啟時無反射 = HIGH (違規)
 // ============================================================================
-void initHallSensor() {
-    Serial.print(F("[HALL] Initializing KY-033 Hall sensor on D3 (GPIO0)..."));
+void initIRSensor() {
+    Serial.print(F("[IR] Initializing KY-033 IR sensor on D3 (GPIO0)..."));
     
     pinMode(PIN_HALL, INPUT_PULLUP);
     
-    // 讀取初始狀態
+    // 讀取初始狀態 (HIGH = 無反射/盒蓋開啟, LOW = 有反射/盒蓋關閉)
     boxOpen = (digitalRead(PIN_HALL) == HIGH);
     
-    // 設定中斷 (下降沿 = 磁鐵靠近, 上升沿 = 磁鐵遠離)
-    // 使用 CHANGE 模式以偵測開/關兩種狀態
-    attachInterrupt(digitalPinToInterrupt(PIN_HALL), hallISR, CHANGE);
+    // 設定中斷 (CHANGE 模式: 偵測反射狀態變化)
+    // LOW→HIGH: 反射面離開 (盒蓋開啟)
+    // HIGH→LOW: 反射面靠近 (盒蓋關閉)
+    attachInterrupt(digitalPinToInterrupt(PIN_HALL), irISR, CHANGE);
     
     Serial.println(F(" OK"));
-    Serial.print(F("[HALL] Initial state: Box "));
-    Serial.println(boxOpen ? F("OPEN") : F("CLOSED"));
+    Serial.print(F("[IR] Initial state: Box "));
+    Serial.println(boxOpen ? F("OPEN (No reflection)") : F("CLOSED (Reflecting)"));
 }
 
 // ============================================================================
@@ -367,6 +409,40 @@ void initRadar() {
     delay(100);
     
     Serial.println(F(" OK"));
+}
+
+// ============================================================================
+// initMic() - 初始化 MAX9418 聲音感測器
+// ============================================================================
+void initMic() {
+    Serial.print(F("[MIC] Initializing MAX9418 sound sensor on A0..."));
+    
+    // ESP8266 A0 不需要特別初始化，直接 analogRead 即可
+    micDb = 40;
+    
+    Serial.println(F(" OK"));
+}
+
+// ============================================================================
+// initNFC() - 初始化 PN532 NFC 模組
+// ============================================================================
+void initNFC() {
+    Serial.print(F("[NFC] Initializing PN532 NFC module..."));
+    
+    nfc.begin();
+    
+    uint32_t versiondata = nfc.getFirmwareVersion();
+    if (!versiondata) {
+        Serial.println(F(" ✗ PN532 not found!"));
+        return;
+    }
+    
+    // 設定為讀取模式
+    nfc.SAMConfig();
+    
+    Serial.println(F(" OK"));
+    Serial.print(F("[NFC] Found chip PN5"));
+    Serial.println((versiondata >> 24) & 0xFF, HEX);
 }
 
 // ============================================================================
@@ -447,23 +523,23 @@ void handleWiFiReconnect() {
 }
 
 // ============================================================================
-// hallISR() - 霍爾感測器中斷服務常式
+// irISR() - KY-033 紅外線感測器中斷服務常式
 // ============================================================================
-void IRAM_ATTR hallISR() {
-    hallTriggered = true;
-    hallTriggerTime = millis();
+void IRAM_ATTR irISR() {
+    irTriggered = true;
+    irTriggerTime = millis();
 }
 
 // ============================================================================
-// processHallInterrupt() - 處理霍爾感測器中斷 (主迴圈中呼叫)
+// processIRInterrupt() - 處理 KY-033 紅外線感測器中斷 (主迴圈中呼叫)
 // ============================================================================
-void processHallInterrupt() {
-    if (!hallTriggered) return;
+void processIRInterrupt() {
+    if (!irTriggered) return;
     
     // 防抖動檢查
-    if (millis() - hallTriggerTime < HALL_DEBOUNCE_MS) return;
+    if (millis() - irTriggerTime < IR_DEBOUNCE_MS) return;
     
-    hallTriggered = false;
+    irTriggered = false;
     
     // 讀取當前狀態
     bool newState = (digitalRead(PIN_HALL) == HIGH);
@@ -471,7 +547,7 @@ void processHallInterrupt() {
     if (newState != boxOpen) {
         boxOpen = newState;
         
-        Serial.print(F("[HALL] Box "));
+        Serial.print(F("[IR] Box "));
         Serial.println(boxOpen ? F("OPENED! ⚠️") : F("CLOSED ✓"));
         
         // 專注狀態下開盒 = 違規
@@ -487,6 +563,8 @@ void processHallInterrupt() {
 // ============================================================================
 void readSensors() {
     readRadar();
+    readMic();
+    readNFC();
 }
 
 // ============================================================================
@@ -516,6 +594,47 @@ void readRadar() {
         if (radarLowStartTime > 0 && millis() - radarLowStartTime >= RADAR_DEBOUNCE_MS) {
             radarPresence = false;
         }
+    }
+}
+
+// ============================================================================
+// readMic() - 讀取 MAX9418 聲音感測器 (類比轉分貝)
+// ============================================================================
+void readMic() {
+    // 讀取類比數值 (0-1023)
+    int raw = analogRead(PIN_MIC);
+    
+    // 簡易轉換邏輯 (僅供參考，實際需校準)
+    // 假設 0-1023 對應 30-100 dB
+    micDb = map(raw, 0, 1023, 30, 100);
+    
+    // 限制範圍
+    if (micDb < 30) micDb = 30;
+    if (micDb > 110) micDb = 110;
+}
+
+// ============================================================================
+// readNFC() - 讀取 PN532 NFC 標籤
+// ============================================================================
+void readNFC() {
+    uint8_t success;
+    uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };  // Buffer to store the returned UID
+    uint8_t uidLength;                        // Length of the UID (4 or 7 bytes depending on ISO14443A card type)
+    
+    // 非阻塞讀取 (等待時間極短)
+    success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 10);
+    
+    if (success) {
+        nfcDetected = true;
+        nfcId = "";
+        for (uint8_t i = 0; i < uidLength; i++) {
+            if (uid[i] < 0x10) nfcId += "0";
+            nfcId += String(uid[i], HEX);
+        }
+        nfcId.toUpperCase();
+    } else {
+        nfcDetected = false;
+        nfcId = "";
     }
 }
 
@@ -767,6 +886,9 @@ void sendSensorData() {
     data["state"] = STATE_NAMES[currentState];
     data["box_open"] = boxOpen;
     data["radar_presence"] = radarPresence;
+    data["mic_db"] = micDb;
+    data["nfc_detected"] = nfcDetected;
+    data["nfc_id"] = nfcId;
     data["uptime"] = millis() / 1000;
     data["timestamp"] = millis();
     

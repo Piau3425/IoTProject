@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Socket.IO Connection Test</title>
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+</head>
+<body>
+    <h1>Socket.IO Connection Test</h1>
+    <div id="status">Connecting...</div>
+    <div id="log" style="font-family: monospace; white-space: pre;"></div>
+    
+    <script>
+        const log = document.getElementById('log');
+        const status = document.getElementById('status');
+        
+        function addLog(msg) {
+            log.textContent += new Date().toLocaleTimeString() + ' - ' + msg + '\n';
+            console.log(msg);
+        }
+        
+        addLog('Starting Socket.IO client...');
+        
+        // Test connection to backend
+        const socket = io('http://localhost:8000', {
+            transports: ['websocket', 'polling'],
+            path: '/socket.io/',
+            reconnection: true,
+        });
+        
+        socket.on('connect', () => {
+            status.textContent = '✅ CONNECTED';
+            status.style.color = 'green';
+            addLog('✅ Connected! Socket ID: ' + socket.id);
+        });
+        
+        socket.on('disconnect', (reason) => {
+            status.textContent = '❌ DISCONNECTED: ' + reason;
+            status.style.color = 'red';
+            addLog('❌ Disconnected: ' + reason);
+        });
+        
+        socket.on('connect_error', (error) => {
+            status.textContent = '❌ CONNECTION ERROR';
+            status.style.color = 'red';
+            addLog('❌ Connection error: ' + error.message);
+            addLog('Error details: ' + JSON.stringify(error));
+        });
+        
+        socket.on('system_state', (data) => {
+            addLog('📡 Received system_state event');
+        });
+        
+        socket.on('hardware_status', (data) => {
+            addLog('🔧 Received hardware_status event');
+        });
+    </script>
+</body>
+</html>

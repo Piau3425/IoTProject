@@ -2,6 +2,20 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { io, Socket } from 'socket.io-client'
 
 // ============================================================================
+// API Base URL Helper
+// ============================================================================
+const getApiBase = () => {
+  const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  return isDev ? 'http://localhost:8000' : ''
+}
+
+// Socket URL for Socket.IO client (needs undefined for same-origin, not empty string)
+const getSocketUrl = () => {
+  const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  return isDev ? 'http://localhost:8000' : undefined
+}
+
+// ============================================================================
 // v1.0 Hardware State Machine
 // ============================================================================
 export type HardwareState = 'IDLE' | 'PREPARING' | 'FOCUSING' | 'PAUSED' | 'VIOLATION' | 'ERROR'
@@ -95,8 +109,9 @@ interface HardwareStatus {
   features?: string  // v1.0: "hall,lcd,radar"
   nfc_detected?: boolean
   ldr_detected?: boolean
+  hall_detected?: boolean  // v1.0: Hall sensor / KY-033 IR sensor
   radar_detected?: boolean
-  hall_detected?: boolean    // v1.0: Hall sensor detected
+  ir_detected?: boolean    // v1.0: IR sensor detected
   lcd_detected?: boolean
   hardware_state?: HardwareState
   firmware_version?: string
@@ -120,7 +135,7 @@ export function useSocket() {
     nfc_detected: false,
     ldr_detected: false,
     radar_detected: false,
-    hall_detected: false,
+    ir_detected: false,
     lcd_detected: false,
     hardware_state: 'IDLE'
   })
@@ -132,18 +147,38 @@ export function useSocket() {
   const previousMockMode = useRef<boolean>(false)
 
   useEffect(() => {
-    const socketInstance = io('/', {
-      transports: ['websocket'],
+    console.log('[WS] Initializing Socket.IO client...')
+    
+    // ✅ Direct connection to backend as per SOCKET_COMMUNICATION.md
+    // Avoid Vite proxy for more stable WebSocket connections
+    const socketUrl = getSocketUrl()
+    const apiBase = getApiBase()
+    
+    console.log('[WS] Connecting to:', socketUrl || 'same origin')
+    
+    const socketInstance = io(socketUrl, {
       path: '/socket.io/',
+      transports: ['polling', 'websocket'],  // Try polling first, then upgrade to WebSocket
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 10,
+      timeout: 20000,
+      autoConnect: true,
+      upgrade: true,
+      rememberUpgrade: true,
+      forceNew: false,
     })
+    
+    console.log('[WS] Socket instance created')
 
     socketInstance.on('connect', () => {
-      if (import.meta.env.DEV) {
-        console.log('[WS] Connected to Focus Enforcer v1.0')
-      }
+      console.log('[WS] ✅ Connected to Focus Enforcer v1.0')
+      console.log('[WS] Socket ID:', socketInstance.id)
+      console.log('[WS] Setting connected = true')
       setConnected(true)
       
-      fetch('/api/hardware/status')
+      // Use absolute URL for API calls when connecting directly to backend
+      fetch(`${apiBase}/api/hardware/status`)
         .then(res => res.json())
         .then(data => {
           if (import.meta.env.DEV) {
@@ -156,7 +191,7 @@ export function useSocket() {
             nfc_detected: data.nfc_detected,
             ldr_detected: data.ldr_detected,
             radar_detected: data.radar_detected,
-            hall_detected: data.hall_detected,
+            ir_detected: data.hall_detected || data.ir_detected,
             lcd_detected: data.lcd_detected,
             hardware_state: data.hardware_state || 'IDLE'
           })
@@ -165,27 +200,31 @@ export function useSocket() {
     })
 
     socketInstance.on('disconnect', () => {
-      if (import.meta.env.DEV) {
-        console.log('[WS] Disconnected')
-      }
+      console.log('[WS] ❌ Disconnected')
       setConnected(false)
     })
 
     socketInstance.on('connect_error', (err) => {
-      console.error('[WS] Connection error:', err.message)
-      setTimeout(() => {
-        if (!socketInstance.connected) {
-          console.log('[WS] Attempting to reconnect...')
-          socketInstance.connect()
-        }
-      }, 2000)
+      console.error('[WS] ❌ Connection error:', err.message)
+      console.error('[WS] Error details:', err)
     })
 
     socketInstance.on('connect_timeout', () => {
-      console.error('[WS] Connection timeout - attempting to reconnect')
+      console.error('[WS] ❌ Connection timeout')
+    })
+
+    socketInstance.on('reconnect_attempt', (attempt) => {
+      console.log(`[WS] 🔄 Reconnection attempt ${attempt}`)
+    })
+
+    socketInstance.on('reconnect_failed', () => {
+      console.error('[WS] ❌ Reconnection failed - all attempts exhausted')
       setTimeout(() => {
-        socketInstance.connect()
-      }, 1000)
+        if (!socketInstance.connected) {
+          console.log('[WS] Attempting manual reconnect...')
+          socketInstance.connect()
+        }
+      }, 2000)
     })
 
     socketInstance.on('system_state', (state: SystemState) => {
@@ -229,7 +268,7 @@ export function useSocket() {
         nfc_detected: status.nfc_detected,
         ldr_detected: status.ldr_detected,
         radar_detected: status.radar_detected,
-        hall_detected: status.hall_detected,
+        ir_detected: status.hall_detected || status.ir_detected,
         lcd_detected: status.lcd_detected,
         hardware_state: status.hardware_state || 'IDLE',
         firmware_version: status.firmware_version
@@ -276,7 +315,7 @@ export function useSocket() {
 
   const stopSession = useCallback(async () => {
     try {
-      const response = await fetch('/api/sessions/stop', {
+      const response = await fetch(`${getApiBase()}/api/sessions/stop`, {
         method: 'POST',
       })
       if (!response.ok) {
@@ -290,7 +329,7 @@ export function useSocket() {
   // v1.0: Pause session
   const pauseSession = useCallback(async () => {
     try {
-      const response = await fetch('/api/sessions/pause', { method: 'POST' })
+      const response = await fetch(`${getApiBase()}/api/sessions/pause`, { method: 'POST' })
       if (!response.ok) {
         console.error('[專注協定] 暫停失敗:', await response.text())
       }
@@ -302,7 +341,7 @@ export function useSocket() {
   // v1.0: Resume session
   const resumeSession = useCallback(async () => {
     try {
-      const response = await fetch('/api/sessions/resume', { method: 'POST' })
+      const response = await fetch(`${getApiBase()}/api/sessions/resume`, { method: 'POST' })
       if (!response.ok) {
         console.error('[專注協定] 恢復失敗:', await response.text())
       }
@@ -343,7 +382,7 @@ export function useSocket() {
     box_open: boolean
   }) => {
     try {
-      const response = await fetch('/api/hardware/mock/manual', {
+      const response = await fetch(`${getApiBase()}/api/hardware/mock/manual`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

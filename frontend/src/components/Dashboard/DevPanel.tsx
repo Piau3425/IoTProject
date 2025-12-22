@@ -59,10 +59,12 @@ export function DevPanel({ onManualControl, isVisible = true, mockState }: DevPa
   }
 
   const triggerNfcValid = () => {
-    sendManualData({ nfc_valid: true, phone_inserted: true })
+    // Only set nfc_valid, don't change phone_inserted or box_open
+    sendManualData({ nfc_valid: true })
   }
 
   const triggerNfcInvalid = () => {
+    // Only set nfc_valid to false, don't change other states
     sendManualData({ nfc_valid: false })
   }
 

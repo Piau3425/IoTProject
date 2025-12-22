@@ -25,6 +25,7 @@ async def get_hardware_status():
         "nfc_detected": nfc_detected,
         "ldr_detected": ldr_detected,
         "hall_detected": ldr_detected,  # v1.0: Hall sensor maps to ldr_detected
+        "ir_detected": ldr_detected,    # Also provide ir_detected for frontend compatibility
         "radar_detected": radar_detected,
         "lcd_detected": 'lcd' in socket_manager.hardware_features,
         "hardware_state": socket_manager.state.hardware_state.value,

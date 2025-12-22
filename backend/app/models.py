@@ -98,6 +98,9 @@ class FocusSession(BaseModel):
     violations: int = 0
     penalties_executed: int = 0
     penalty_config: PenaltyConfig = PenaltyConfig()
+    # v1.0: Pause/Resume tracking
+    paused_at: Optional[datetime] = None  # When the session was paused
+    total_paused_seconds: int = 0  # Total time spent paused
 
 
 class SocialPlatform(str, Enum):

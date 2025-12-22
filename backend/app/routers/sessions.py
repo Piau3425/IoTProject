@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ..socket_manager import socket_manager
 from ..models import SessionStatus
+from ..logger import safe_print
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
@@ -34,7 +35,7 @@ def save_hostage_image(file: UploadFile) -> str:
     hostage_path = get_hostage_path()
     with open(hostage_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    print(f"[人質協定] 人質照片已儲存: {hostage_path}")
+    safe_print(f"[人質協定] 人質照片已儲存: {hostage_path}")
     return str(hostage_path)
 
 
@@ -43,7 +44,7 @@ def delete_hostage_image():
     hostage_path = get_hostage_path()
     if hostage_path.exists():
         os.remove(hostage_path)
-        print("[人質協定] 任務完成，人質照片已銷毀")
+        safe_print("[人質協定] 任務完成，人質照片已銷毀")
 
 
 def get_hostage_image_if_exists() -> Optional[str]:

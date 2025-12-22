@@ -6,6 +6,14 @@ import sys
 import asyncio
 import os
 
+# Safe print function for startup
+def safe_print(*args, **kwargs):
+    try:
+        print(*args, **kwargs)
+        sys.stdout.flush()
+    except (OSError, IOError, BrokenPipeError):
+        pass
+
 # CRITICAL: Set event loop policy BEFORE any async operations
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -16,12 +24,12 @@ if __name__ == "__main__":
     import uvicorn
     from app.config import settings
     
-    print("=" * 65)
-    print(f"Starting {settings.APP_NAME}")
-    print(f"Host: {settings.HOST}:{settings.PORT}")
-    print(f"Debug Mode: {settings.DEBUG}")
-    print(f"Mock Hardware: {settings.MOCK_HARDWARE}")
-    print("=" * 65)
+    safe_print("=" * 65)
+    safe_print(f"Starting {settings.APP_NAME}")
+    safe_print(f"Host: {settings.HOST}:{settings.PORT}")
+    safe_print(f"Debug Mode: {settings.DEBUG}")
+    safe_print(f"Mock Hardware: {settings.MOCK_HARDWARE}")
+    safe_print("=" * 65)
     
     # Use --reload-dir to avoid watching unnecessary files
     uvicorn.run(

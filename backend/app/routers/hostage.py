@@ -7,6 +7,8 @@ import json
 import uuid
 from pathlib import Path
 
+from ..logger import safe_print
+
 router = APIRouter(prefix="/api/hostage", tags=["hostage"])
 
 HOSTAGE_DIR = Path(__file__).parent.parent.parent / "hostage_evidence"
@@ -114,7 +116,7 @@ async def upload_image(file: UploadFile = File(...)):
     }
     save_metadata(metadata)
     
-    print(f"[人質協定] 新照片已上傳: {filename} (ID: {image_id})")
+    safe_print(f"[人質協定] 新照片已上傳: {filename} (ID: {image_id})")
     
     return {
         "success": True,
@@ -163,7 +165,7 @@ async def delete_image(image_id: str):
     del metadata[image_id]
     save_metadata(metadata)
     
-    print(f"[人質協定] 照片已刪除: {image_id}")
+    safe_print(f"[人質協定] 照片已刪除: {image_id}")
     
     return {
         "success": True,

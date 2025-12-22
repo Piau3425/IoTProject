@@ -50,40 +50,40 @@ export default {
         },
         // macOS style colors
         mac: {
-          bg: "#1e1e1e",
-          surface: "#2d2d2d",
-          overlay: "#3d3d3d",
-          border: "rgba(255, 255, 255, 0.1)",
-          text: "#ffffff",
-          textSecondary: "#a0a0a0",
-          accent: "#007aff",
-          accentHover: "#0051d5",
-          success: "#34c759",
-          warning: "#ff9500",
-          danger: "#ff3b30",
-          purple: "#af52de",
+          bg: "#09090b", // Zinc 950
+          surface: "#18181b", // Zinc 900
+          overlay: "#27272a", // Zinc 800
+          border: "rgba(255, 255, 255, 0.08)",
+          text: "#fafafa", // Zinc 50
+          textSecondary: "#a1a1aa", // Zinc 400
+          accent: "#fafafa", // White accent for minimal look
+          accentHover: "#e4e4e7", // Zinc 200
+          success: "#10b981", // Emerald 500
+          warning: "#f59e0b", // Amber 500
+          danger: "#ef4444", // Red 500
+          purple: "#a855f7", // Purple 500
         },
         // Keep neon colors for penalty states
         neon: {
-          red: "#ff3b30",
-          green: "#34c759",
-          blue: "#007aff",
-          purple: "#af52de",
-          yellow: "#ff9500",
-          orange: "#ff9500",
+          red: "#ef4444",
+          green: "#10b981",
+          blue: "#3b82f6",
+          purple: "#a855f7",
+          yellow: "#f59e0b",
+          orange: "#f97316",
           // Gradient mix colors
-          'green-mix-10': 'rgba(52, 199, 89, 0.1)',
-          'green-mix-20': 'rgba(52, 199, 89, 0.2)',
-          'green-mix-50': 'rgba(52, 199, 89, 0.5)',
-          'yellow-mix-10': 'rgba(255, 149, 0, 0.1)',
-          'yellow-mix-20': 'rgba(255, 149, 0, 0.2)',
-          'yellow-mix-50': 'rgba(255, 149, 0, 0.5)',
-          'orange-mix-10': 'rgba(255, 149, 0, 0.1)',
-          'orange-mix-20': 'rgba(255, 149, 0, 0.2)',
-          'orange-mix-50': 'rgba(255, 149, 0, 0.5)',
-          'red-mix-10': 'rgba(255, 59, 48, 0.1)',
-          'red-mix-20': 'rgba(255, 59, 48, 0.2)',
-          'red-mix-50': 'rgba(255, 59, 48, 0.5)',
+          'green-mix-10': 'rgba(16, 185, 129, 0.1)',
+          'green-mix-20': 'rgba(16, 185, 129, 0.2)',
+          'green-mix-50': 'rgba(16, 185, 129, 0.5)',
+          'yellow-mix-10': 'rgba(245, 158, 11, 0.1)',
+          'yellow-mix-20': 'rgba(245, 158, 11, 0.2)',
+          'yellow-mix-50': 'rgba(245, 158, 11, 0.5)',
+          'orange-mix-10': 'rgba(249, 115, 22, 0.1)',
+          'orange-mix-20': 'rgba(249, 115, 22, 0.2)',
+          'orange-mix-50': 'rgba(249, 115, 22, 0.5)',
+          'red-mix-10': 'rgba(239, 68, 68, 0.1)',
+          'red-mix-20': 'rgba(239, 68, 68, 0.2)',
+          'red-mix-50': 'rgba(239, 68, 68, 0.5)',
         },
       },
       borderRadius: {

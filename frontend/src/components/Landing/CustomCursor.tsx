@@ -2,35 +2,35 @@ import { useEffect, useRef, useState } from 'react'
 
 export const CustomCursor = () => {
   const cursorRef = useRef<HTMLDivElement>(null)
-  const cursorInnerRef = useRef<HTMLDivElement>(null)
+  const cursorDotRef = useRef<HTMLDivElement>(null)
   const [isHovering, setIsHovering] = useState(false)
+  
+  // Use refs for mutable state to avoid re-renders
   const mousePos = useRef({ x: 0, y: 0 })
   const cursorPos = useRef({ x: 0, y: 0 })
-  const cursorInnerPos = useRef({ x: 0, y: 0 })
+  const dotPos = useRef({ x: 0, y: 0 })
 
   useEffect(() => {
     const cursor = cursorRef.current
-    const cursorInner = cursorInnerRef.current
-    if (!cursor || !cursorInner) return
+    const dot = cursorDotRef.current
+    if (!cursor || !dot) return
 
-    // Hide default cursor
-    document.body.style.cursor = 'none'
-    
-    // Use RAF for butter-smooth 60fps animations
     let rafId: number
 
     const updateCursor = () => {
-      // Smooth interpolation for outer cursor (heavy lag)
-      cursorPos.current.x += (mousePos.current.x - cursorPos.current.x) * 0.15
-      cursorPos.current.y += (mousePos.current.y - cursorPos.current.y) * 0.15
+      // Smooth interpolation for the glow (laggy)
+      const lerpFactor = 0.1
+      cursorPos.current.x += (mousePos.current.x - cursorPos.current.x) * lerpFactor
+      cursorPos.current.y += (mousePos.current.y - cursorPos.current.y) * lerpFactor
 
-      // Faster interpolation for inner cursor (light lag)
-      cursorInnerPos.current.x += (mousePos.current.x - cursorInnerPos.current.x) * 0.25
-      cursorInnerPos.current.y += (mousePos.current.y - cursorInnerPos.current.y) * 0.25
+      // Faster interpolation for the dot (responsive)
+      const dotLerpFactor = 0.5
+      dotPos.current.x += (mousePos.current.x - dotPos.current.x) * dotLerpFactor
+      dotPos.current.y += (mousePos.current.y - dotPos.current.y) * dotLerpFactor
 
-      // Apply transforms directly for best performance
-      cursor.style.transform = `translate(${cursorPos.current.x}px, ${cursorPos.current.y}px) translate(-50%, -50%)`
-      cursorInner.style.transform = `translate(${cursorInnerPos.current.x}px, ${cursorInnerPos.current.y}px) translate(-50%, -50%)`
+      // Apply transforms
+      cursor.style.transform = `translate3d(${cursorPos.current.x}px, ${cursorPos.current.y}px, 0) translate(-50%, -50%)`
+      dot.style.transform = `translate3d(${dotPos.current.x}px, ${dotPos.current.y}px, 0) translate(-50%, -50%)`
 
       rafId = requestAnimationFrame(updateCursor)
     }
@@ -42,38 +42,30 @@ export const CustomCursor = () => {
     const handleMouseEnter = () => setIsHovering(true)
     const handleMouseLeave = () => setIsHovering(false)
 
-    // MutationObserver to watch for dynamically added elements
-    const setupInteractiveListeners = () => {
-      const interactiveElements = document.querySelectorAll(
-        'button, a, [data-magnetic], input, textarea, [role="button"], select'
+    // Add listeners to interactive elements
+    const setupListeners = () => {
+      const elements = document.querySelectorAll(
+        'button, a, input, textarea, [role="button"], .interactive'
       )
-
-      interactiveElements.forEach((el) => {
+      elements.forEach(el => {
         el.addEventListener('mouseenter', handleMouseEnter)
         el.addEventListener('mouseleave', handleMouseLeave)
       })
-
-      return interactiveElements
+      return elements
     }
 
-    let currentElements = setupInteractiveListeners()
+    let elements = setupListeners()
 
-    // Watch for DOM changes
+    // Observer for dynamic content
     const observer = new MutationObserver(() => {
-      // Remove old listeners
-      currentElements.forEach((el) => {
+      elements.forEach(el => {
         el.removeEventListener('mouseenter', handleMouseEnter)
         el.removeEventListener('mouseleave', handleMouseLeave)
       })
-      // Setup new ones
-      currentElements = setupInteractiveListeners()
+      elements = setupListeners()
     })
 
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-    })
-
+    observer.observe(document.body, { childList: true, subtree: true })
     window.addEventListener('mousemove', handleMouseMove)
     rafId = requestAnimationFrame(updateCursor)
 
@@ -81,53 +73,28 @@ export const CustomCursor = () => {
       cancelAnimationFrame(rafId)
       window.removeEventListener('mousemove', handleMouseMove)
       observer.disconnect()
-      currentElements.forEach((el) => {
+      elements.forEach(el => {
         el.removeEventListener('mouseenter', handleMouseEnter)
         el.removeEventListener('mouseleave', handleMouseLeave)
       })
-      document.body.style.cursor = ''
     }
   }, [])
 
   return (
     <>
-      {/* Outer cursor ring */}
+      {/* Main Dot */}
+      <div
+        ref={cursorDotRef}
+        className="fixed top-0 left-0 pointer-events-none z-[10001] w-2 h-2 bg-white rounded-full mix-blend-difference"
+      />
+      
+      {/* Glow / Follower */}
       <div
         ref={cursorRef}
-        className="fixed top-0 left-0 pointer-events-none z-[10000] mix-blend-difference"
-        style={{
-          width: isHovering ? '60px' : '40px',
-          height: isHovering ? '60px' : '40px',
-          transition: 'width 0.3s ease, height 0.3s ease',
-        }}
-      >
-        <div
-          className="w-full h-full rounded-full border-2 border-white"
-          style={{
-            opacity: isHovering ? 0.6 : 0.5,
-            transition: 'opacity 0.3s ease',
-          }}
-        />
-      </div>
-
-      {/* Inner cursor dot */}
-      <div
-        ref={cursorInnerRef}
-        className="fixed top-0 left-0 pointer-events-none z-[10000] mix-blend-difference"
-        style={{
-          width: isHovering ? '12px' : '8px',
-          height: isHovering ? '12px' : '8px',
-          transition: 'width 0.3s ease, height 0.3s ease',
-        }}
-      >
-        <div
-          className="w-full h-full rounded-full bg-white"
-          style={{
-            opacity: isHovering ? 1 : 0.8,
-            transition: 'opacity 0.3s ease',
-          }}
-        />
-      </div>
+        className={`fixed top-0 left-0 pointer-events-none z-[10000] rounded-full transition-all duration-300 ease-out mix-blend-screen
+          ${isHovering ? 'w-16 h-16 bg-white/20 blur-md' : 'w-8 h-8 bg-white/10 blur-sm'}
+        `}
+      />
     </>
   )
 }

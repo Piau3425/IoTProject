@@ -1,8 +1,7 @@
 import { Switch } from '@/components/ui/switch'
-import { Label } from '@/components/ui/label'
-import { MagneticButton } from '@/components/Landing/MagneticButton'
-import { Cpu, Zap, Shield, Loader2 } from 'lucide-react'
+import { Cpu, Shield, Wifi, WifiOff } from 'lucide-react'
 import { useState, useEffect } from 'react'
+import { cn } from '@/lib/utils'
 
 interface HeaderProps {
   connected: boolean
@@ -13,10 +12,8 @@ interface HeaderProps {
 }
 
 export function Header({ connected, hardwareConnected, isMock, mockModeLoading, onToggleMock }: HeaderProps) {
-  // Optimistic UI state - show intended state while loading
   const [optimisticMockState, setOptimisticMockState] = useState(isMock)
   
-  // Update optimistic state when actual state changes
   useEffect(() => {
     if (!mockModeLoading) {
       setOptimisticMockState(isMock)
@@ -29,75 +26,51 @@ export function Header({ connected, hardwareConnected, isMock, mockModeLoading, 
   }
   
   return (
-    <header className="glass border-b border-white/10 sticky top-0 z-50 backdrop-blur-xl animate-slide-down">
-      <div className="container mx-auto px-4 py-4">
-        <div className="flex items-center justify-between">
-          {/* Logo & Title */}
-          <MagneticButton 
-            as="div" 
-            className="flex items-center gap-4 group"
-            strength={0.3}
-          >
-            <div className="relative hover-lift transition-all duration-500">
-              <Shield className="w-10 h-10 text-neon-red group-hover:scale-110 transition-all duration-500" />
-              <Zap className="w-4 h-4 text-neon-green absolute -bottom-1 -right-1 animate-pulse-glow" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight">
-                <span className="text-neon-red transition-all duration-300">專注</span>
-                <span className="text-white transition-all duration-300">執法者</span>
-              </h1>
-              <p className="hidden sm:block text-xs text-mac-textSecondary font-medium transition-all duration-300">
-                零信任監控系統 v1.0
-              </p>
-            </div>
-          </MagneticButton>
+    <header className="sticky top-0 z-50 w-full border-b border-white/5 bg-background/80 backdrop-blur-md supports-[backdrop-filter]:bg-background/60">
+      <div className="container flex h-16 items-center justify-between px-4">
+        {/* Logo */}
+        <div className="flex items-center gap-3 group cursor-default">
+          <div className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-white/5 border border-white/10 transition-all duration-500 group-hover:border-primary/50 group-hover:bg-primary/10">
+            <Shield className="h-5 w-5 text-foreground transition-colors group-hover:text-primary" />
+            <div className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-neon-green shadow-[0_0_10px_rgba(16,185,129,0.5)] animate-pulse" />
+          </div>
+          <div className="flex flex-col">
+            <h1 className="text-lg font-bold tracking-tight text-foreground leading-none">
+              Focus<span className="text-primary">Enforcer</span>
+            </h1>
+            <span className="text-[10px] font-medium text-muted-foreground tracking-[0.2em] uppercase mt-1 group-hover:text-primary/80 transition-colors">
+              零信任監控系統
+            </span>
+          </div>
+        </div>
 
-          {/* Status & Controls */}
-          <div className="flex items-center gap-3 sm:gap-6">
-            {/* Connection Status */}
-            <MagneticButton 
-              as="div"
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg glass-light transition-all duration-300 hover:bg-white/10"
-              strength={0.25}
-            >
-              <div className={`w-2 h-2 rounded-full transition-all duration-500 ${
-                connected ? 'bg-neon-green animate-pulse-glow shadow-glow-green' : 'bg-neon-red shadow-glow-red'
-              }`} />
-              <span className="hidden sm:inline text-xs text-mac-textSecondary font-medium">
-                {connected ? '通訊連線中' : '通訊中斷'}
+        {/* Status & Controls */}
+        <div className="flex items-center gap-4 sm:gap-6">
+          {/* Connection Status */}
+          <div className={cn(
+            "flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium transition-all duration-300",
+            connected 
+              ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 shadow-[0_0_15px_rgba(16,185,129,0.1)]" 
+              : "bg-red-500/10 text-red-500 border border-red-500/20 shadow-[0_0_15px_rgba(239,68,68,0.1)]"
+          )}>
+            {connected ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
+            <span className="hidden sm:inline">{connected ? '系統連線正常' : '連線中斷'}</span>
+          </div>
+
+          {/* Hardware Status */}
+          <div className="flex items-center gap-3 pl-4 border-l border-white/5">
+            <div className="flex items-center gap-2" title="硬體模擬模式">
+              <Cpu className={cn("h-4 w-4 transition-colors", hardwareConnected ? "text-primary" : "text-muted-foreground")} />
+              <span className="hidden sm:inline text-sm text-muted-foreground">
+                {mockModeLoading ? '同步中...' : '模擬硬體'}
               </span>
-            </MagneticButton>
-
-            {/* Mock Hardware Toggle */}
-            <MagneticButton
-              as="div"
-              className={`flex items-center gap-2 sm:gap-3 px-2 sm:px-3 py-1.5 rounded-lg glass-light border transition-all duration-300 ${
-                mockModeLoading 
-                  ? 'border-neon-yellow/50 bg-neon-yellow/10' 
-                  : 'border-white/10 hover:border-white/20 hover:bg-white/5'
-              }`}
-              strength={0.3}
-            >
-              {mockModeLoading ? (
-                <Loader2 className="w-3.5 h-3.5 text-neon-yellow animate-spin" />
-              ) : (
-                <Cpu className={`w-3.5 h-3.5 transition-all duration-500 ${
-                  hardwareConnected ? 'text-neon-green' : 'text-mac-textSecondary'
-                }`} />
-              )}
-              <Label className={`hidden sm:inline text-xs cursor-pointer font-medium ${
-                mockModeLoading ? 'text-neon-yellow' : 'text-white'
-              }`}>
-                {mockModeLoading ? '準備中...' : '模擬硬體'}
-              </Label>
-              <Switch 
-                checked={optimisticMockState}
-                onCheckedChange={handleToggle}
-                disabled={mockModeLoading}
-                className="scale-75"
-              />
-            </MagneticButton>
+            </div>
+            <Switch 
+              checked={optimisticMockState}
+              onCheckedChange={handleToggle}
+              disabled={mockModeLoading}
+              className="data-[state=checked]:bg-primary scale-90"
+            />
           </div>
         </div>
       </div>

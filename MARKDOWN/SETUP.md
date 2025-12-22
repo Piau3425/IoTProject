@@ -1,194 +1,109 @@
 # 🛠️ 系統安裝與設定指南
 
-本指南將引導您從零開始完成 **THE FOCUS ENFORCER v1.0** 的環境建置。
+本指南將引導您完成 **THE FOCUS ENFORCER v1.0** 的軟硬體建置。
 
 ---
 
 ## 📋 需求清單
 
-### 軟體需求
-- **Python 3.10+**: 後端邏輯與自動化腳本。
-- **Node.js 18+**: 前端介面開發與運行。
-- **VS Code**: 建議使用的開發編輯器。
-- **PlatformIO**: VS Code 擴充功能，用於燒錄硬體韌體。
+### 軟體環境
+- **OS**: Windows 10/11 (推薦)
+- **Python**: 3.10 或以上
+- **Node.js**: 18.0 或以上
+- **Git**: 版本控制工具
+- **VS Code**: 推薦編輯器 (需安裝 PlatformIO 擴充功能)
 
-### 硬體需求 (v1.0)
-| 元件 | 數量 | 用途 | 備註 |
-|------|------|------|------|
-| **Wemos D1 Mini (ESP8266)** | 1 | 主控板 | 4MB Flash |
-| **1602 I2C LCD** | 1 | 狀態顯示 | PCF8574 背板 |
-| **霍爾感測器** | 1 | 盒蓋偵測 | KY-033 |
-| **LD2410 mmWave 雷達** | 1 | 人體偵測 | 24GHz |
-| **強力磁鐵** | 1 | 盒蓋觸發 | 釹鐵硼 N35+ |
-| 杜邦線若干 | - | 連接用 | - |
-
----
-
-## 🔌 硬體接線指南 (v1.0 完整版)
-
-### GPIO 分配總表
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    Wemos D1 Mini GPIO 分配表 (v1.0)                         │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  模組              │ 功能       │ D1-mini │ GPIO  │ 備註                    │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  1602 LCD (I2C)    │ SDA        │ D2      │ GPIO4 │ I2C 資料線 (共用)       │
-│                    │ SCL        │ D1      │ GPIO5 │ I2C 時脈線 (共用)       │
-│                    │ VCC        │ 5V      │ -     │ ⚠️ 需 5V 供電           │
-│                    │ GND        │ GND     │ -     │                         │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  霍爾感測器        │ OUT        │ D3      │ GPIO0 │ ⚡ 中斷腳位 (CHANGE)    │
-│  (KY-033)           │ VCC        │ 3V3     │ -     │ 3.3V 供電               │
-│                    │ GND        │ GND     │ -     │ 磁鐵靠近 = LOW          │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  LD2410 mmWave     │ TX         │ D5      │ GPIO14│ SoftwareSerial RX       │
-│                    │ RX         │ D6      │ GPIO12│ SoftwareSerial TX       │
-│                    │ VCC        │ 5V      │ -     │ ⚠️ 需 5V 供電           │
-│                    │ GND        │ GND     │ -     │                         │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### 霍爾感測器安裝位置
-
-```
-┌────────────────────────────────────┐
-│           盒蓋 (頂部)              │
-│    ┌──────────────────────┐        │
-│    │      磁鐵 (N極朝下)  │        │  ← 強力磁鐵黏貼於此
-│    └──────────────────────┘        │
-└────────────────────────────────────┘
-                 ↓ 關閉時磁鐵靠近
-┌────────────────────────────────────┐
-│           盒體 (底部)              │
-│    ┌──────────────────────┐        │
-│    │   霍爾感測器 (正面)  │        │  ← 感測器安裝於此
-│    └──────────────────────┘        │
-│                                    │
-│    ┌─────────┐                     │
-│    │ D1 Mini │                     │
-│    └─────────┘                     │
-└────────────────────────────────────┘
-```
-
-**霍爾感測器邏輯：**
-- 磁鐵靠近 (盒蓋關閉)：OUT = **LOW** → 正常
-- 磁鐵遠離 (盒蓋開啟)：OUT = **HIGH** → 觸發違規
+### 硬體清單 (v1.0)
+| 元件 | 數量 | 用途 |
+|------|------|------|
+| **Wemos D1 Mini (ESP8266)** | 1 | 主控板 |
+| **1602 LCD (含 I2C 轉板)** | 1 | 狀態顯示 |
+| **KY-033 紅外線感測器** | 1 | 盒蓋開關偵測 (反射式) |
+| **LD2410 mmWave 雷達** | 1 | 人體存在偵測 |
+| **MAX9418 聲音感測器** | 1 | 環境噪音偵測 |
+| **PN532 NFC 模組** | 1 | 手機放入偵測 (I2C 模式) |
+| **麵包板與杜邦線** | 若干 | 連接電路 |
 
 ---
 
-## 📂 1. 後端設定 (Backend)
+## 🔌 硬體接線指南
 
-1. **進入後端目錄**:
-   ```powershell
-   cd backend
-   ```
+請依照下表將各模組連接至 Wemos D1 Mini。
 
-2. **建立並啟用虛擬環境**:
-   ```powershell
-   python -m venv venv
-   .\venv\Scripts\activate
-   ```
+### GPIO 分配表
 
-3. **安裝相依套件**:
-   ```powershell
-   pip install -r requirements.txt
-   ```
-
-4. **安裝 Playwright 瀏覽器 (用於 Threads 自動化)**:
-   ```powershell
-   playwright install chromium
-   ```
-
-5. **設定憑證檔案**:
-   - 將 `credentials.example.json` 重新命名為 `credentials.json`。
-   - 填入您的社交平台資訊（詳見 [USAGE.md](USAGE.md)）。
-
----
-
-## 💻 2. 前端設定 (Frontend)
-
-1. **進入前端目錄**:
-   ```powershell
-   cd frontend
-   ```
-
-2. **安裝相依套件**:
-   ```powershell
-   npm install
-   ```
-
-3. **啟動開發伺服器**:
-   ```powershell
-   npm run dev
-   ```
-   - 預設開啟地址：`http://localhost:5173`
+| 模組 | 接腳 | D1 Mini | GPIO | 備註 |
+| :--- | :--- | :--- | :--- | :--- |
+| **1602 LCD** | SDA | D2 | GPIO4 | I2C Bus |
+| | SCL | D1 | GPIO5 | I2C Bus |
+| | VCC | 5V | - | |
+| | GND | GND | - | |
+| **PN532 NFC** | SDA | D2 | GPIO4 | I2C Bus (共用) |
+| | SCL | D1 | GPIO5 | I2C Bus (共用) |
+| | VCC | 3V3/5V | - | |
+| | GND | GND | - | |
+| **KY-033 IR** | DO | D3 | GPIO0 | 數位輸出 (中斷) |
+| | VCC | 3V3 | - | |
+| | GND | GND | - | |
+| **LD2410 Radar** | TX | D5 | GPIO14 | 接軟體串列 RX |
+| | RX | D6 | GPIO12 | 接軟體串列 TX |
+| | VCC | 5V | - | |
+| | GND | GND | - | |
+| **MAX9418 Mic** | AO | A0 | ADC0 | 類比輸出 |
+| | VCC | 3V3 | - | |
+| | GND | GND | - | |
 
 ---
 
-## 🔌 3. 硬體韌體設定
+## 💻 軟體安裝步驟
 
-### 韌體設定修改
+### 1. 專案初始化
+在專案根目錄開啟 PowerShell，執行以下指令以自動設定環境：
 
-1. 開啟 `src/main.cpp`
-2. 修改以下設定：
-
-```cpp
-// WiFi 設定
-const char* WIFI_SSID = "你的WiFi名稱";
-const char* WIFI_PASS = "你的WiFi密碼";
-
-// 後端伺服器 IP (執行 ipconfig 查看)
-const char* WS_HOST = "192.168.x.x";
-
-// LCD I2C 地址 (常見: 0x27 或 0x3F)
-#define LCD_ADDR 0x27
-```
-
-### 燒錄韌體
-
-1. 在 VS Code 中開啟專案根目錄
-2. 等待 PlatformIO 自動下載依賴庫
-3. 點擊 VS Code 下方狀態列的 **PlatformIO: Upload** 圖示
-4. 等待編譯與燒錄完成
-
-### 除錯技巧
-
-- 開啟 Serial Monitor (115200 baud) 查看啟動日誌
-- 確認 WiFi 連線成功
-- 確認 WebSocket 連線至後端
-- 檢查 LCD 是否顯示 "READY TO GO"
-
----
-
-## 🏃 4. 啟動系統
-
-您可以手動啟動，或使用根目錄提供的腳本：
-
-### 快速啟動 (Windows)
-在根目錄執行：
 ```powershell
-.\start.bat
+.\Setup.ps1
 ```
+此腳本會：
+- 建立 Python 虛擬環境 (`.venv`)
+- 安裝 Python 依賴 (`backend/requirements.txt`)
+- 安裝 Node.js 依賴 (`frontend/package.json`)
+- 建立初始設定檔
 
-### 手動啟動
-1. **啟動後端**:
-   ```powershell
-   cd backend
-   python run.py
+### 2. 燒錄韌體
+1. 開啟 VS Code。
+2. 安裝 **PlatformIO IDE** 擴充功能。
+3. 開啟 `src/main.cpp`。
+4. 修改 WiFi 設定：
+   ```cpp
+   const char* WIFI_SSID = "Your_SSID";
+   const char* WIFI_PASS = "Your_Password";
+   const char* WS_HOST = "Your_PC_IP"; // 電腦的區域網路 IP
    ```
-2. **啟動前端**:
-   ```powershell
-   cd frontend
-   npm run dev
-   ```
+5. 連接 D1 Mini 至電腦 USB。
+6. 點擊 PlatformIO 下方的 **Upload** (➡️) 按鈕進行編譯與燒錄。
+
+### 3. 啟動系統
+執行主啟動腳本：
+
+```powershell
+.\Start-FocusEnforcer.ps1
+```
+系統將會：
+1. 啟動後端伺服器 (http://localhost:8000)
+2. 啟動前端開發伺服器 (http://localhost:5173)
+3. 自動開啟瀏覽器進入儀表板
 
 ---
 
-## ⚠️ 常見問題
-- **Q: 為什麼硬體連不上 WebSocket？**
-  - A: 請確保電腦與 D1 Mini 連接在同一個 WiFi 下，且防火牆已允許 8000 埠。
-- **Q: Threads 自動化失敗？**
-  - A: 確保已執行 `playwright install`，且 `credentials.json` 中的帳密正確。
+## ⚙️ 社交平台設定
+
+若要啟用社交羞辱功能，需設定憑證：
+
+1. 啟動系統後，進入儀表板的 **Social Settings** 區塊。
+2. 輸入 Threads 帳號密碼 (用於自動發文)。
+3. 輸入 Gmail 帳號與應用程式密碼 (用於發信)。
+4. 點擊 **Save Credentials**。
+5. 系統會將憑證加密儲存於 `backend/credentials.json`。
+
+> **注意**: 建議使用分身帳號進行測試，以免發生意外。
 

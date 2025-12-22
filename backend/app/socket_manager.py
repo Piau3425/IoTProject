@@ -5,6 +5,7 @@ from typing import Optional, Callable, List
 import socketio
 
 from .config import settings
+from .logger import safe_print
 from .models import (
     SensorData, SystemState, PhoneStatus, PresenceStatus, BoxStatus, 
     NoiseStatus, SessionStatus, PenaltySettings, PenaltyConfig, FocusSession,
@@ -19,7 +20,7 @@ class MockHardwareState:
         self.person_present: bool = True
         self.nfc_valid: bool = True
         self.box_locked: bool = True
-        self.box_open: bool = False  # Hall sensor - box open state
+        self.box_open: bool = False  # KY-033 IR sensor - box open state
         self.manual_mode: bool = False
     
     def to_dict(self) -> dict:
@@ -38,14 +39,17 @@ class SocketManager:
         self.sio = socketio.AsyncServer(
             async_mode='asgi',
             cors_allowed_origins='*',
-            logger=False,
-            engineio_logger=False
+            logger=False,  # Disable verbose logging
+            engineio_logger=False  # Disable engine.io logging
         )
         self.app = socketio.ASGIApp(self.sio)
+        
+        print("[Socket.IO] Server initialized")
         
         self.state = SystemState()
         self.connected_clients: List[str] = []
         self.hardware_connected: bool = False
+        self.physical_hardware_ws_connected: bool = False  # Track if physical hardware WebSocket is connected
         self.mock_mode_active: bool = False
         self.mock_task: Optional[asyncio.Task] = None
         self.mock_state: MockHardwareState = MockHardwareState()
@@ -85,7 +89,7 @@ class SocketManager:
                 'mock_state': self.mock_state.to_dict(),
                 'nfc_detected': nfc_detected,
                 'ldr_detected': ldr_detected,
-                'hall_detected': ldr_detected,  # v1.0: Hall sensor maps to ldr_detected
+                'hall_detected': ldr_detected,  # v1.0: KY-033 IR sensor maps to ldr_detected field for backward compatibility
                 'radar_detected': radar_detected,
                 'lcd_detected': False,  # Will be updated when hardware connects
                 'hardware_state': self.state.hardware_state.value,
@@ -106,14 +110,14 @@ class SocketManager:
             board = data.get('board', 'D1-mini')
             features = data.get('features', '')  # v1.0: "hall,lcd,radar"
             
-            # v1.0: Hall sensor replaces LDR
+            # v1.0: KY-033 IR sensor (反射式紅外線感測器) replaces LDR for box open/close detection
             hall_detected = 'hall' in features or data.get('hall_detected', True)
             radar_detected = 'radar' in features or data.get('radar_detected', True)
             lcd_detected = 'lcd' in features
             
             # Legacy compatibility
             nfc_detected = data.get('nfc_detected', False)
-            ldr_detected = data.get('ldr_detected', hall_detected)  # Map hall to ldr for frontend
+            ldr_detected = data.get('ldr_detected', hall_detected)  # Map IR sensor to ldr field for frontend
             
             if self.mock_mode_active:
                 self._throttled_log('hw_ignored', f"[HARDWARE] Ignoring physical hardware (Mock mode is active)", force=False)
@@ -123,10 +127,11 @@ class SocketManager:
             self._throttled_log('hw_features', f"[HARDWARE] Features: {features}", force=True)
             
             self.hardware_connected = True
+            self.physical_hardware_ws_connected = True  # Mark physical hardware as connected
             self.hardware_firmware_version = version
             self.hardware_features = features
             self.physical_nfc_detected = nfc_detected
-            self.physical_ldr_detected = hall_detected  # Hall sensor maps to ldr_detected
+            self.physical_ldr_detected = hall_detected  # KY-033 IR sensor maps to ldr_detected field
             self.physical_radar_detected = radar_detected
             
             await self.broadcast_event('hardware_status', {
@@ -138,7 +143,8 @@ class SocketManager:
                 'features': features,
                 'nfc_detected': nfc_detected,
                 'ldr_detected': hall_detected,
-                'hall_detected': hall_detected,  # v1.0: Explicit hall sensor field
+                'hall_detected': hall_detected,  # v1.0: KY-033 IR sensor field
+                'ir_detected': hall_detected,    # Also provide ir_detected for frontend compatibility
                 'radar_detected': radar_detected,
                 'lcd_detected': lcd_detected,
                 'mock_state': self.mock_state.to_dict()
@@ -199,7 +205,7 @@ class SocketManager:
             
             # v1.0: Extract new fields
             nfc_detected = data.get('nfc_detected', False)
-            ldr_detected = data.get('ldr_detected', False)  # Actually hall sensor in v1.0
+            ldr_detected = data.get('ldr_detected', False)  # Actually KY-033 IR sensor in v1.0
             if ldr_detected is not None:
                 data['ldr_detected'] = ldr_detected
             
@@ -253,7 +259,7 @@ class SocketManager:
             if 'nfc_id' in data and data['nfc_id'] == '':
                 data['nfc_id'] = None
             
-            # Handle box_open field (v1.0: Hall sensor, v2.0: LDR)
+            # Handle box_open field (v1.0: KY-033 IR sensor, v2.0: LDR)
             if 'box_open' not in data:
                 # Legacy compatibility: infer from box_locked
                 data['box_open'] = not data.get('box_locked', True)
@@ -269,17 +275,33 @@ class SocketManager:
                 except ValueError:
                     pass
             
-            # Update phone status based on NFC (legacy, v1.0 doesn't use NFC)
-            if sensor.nfc_id and not sensor.box_open:
-                if self.state.phone_status != PhoneStatus.LOCKED:
-                    self._throttled_log('phone_locked', "[STATUS] ✓ Phone locked in box", force=True)
-                self.state.phone_status = PhoneStatus.LOCKED
-            elif not sensor.nfc_id or sensor.box_open:
-                if self.state.phone_status == PhoneStatus.LOCKED:
-                    self.state.phone_status = PhoneStatus.REMOVED
-                    self._throttled_log('phone_removed', "[ALERT] ⚠️  Phone removed from box!", force=True)
+            # Update phone status based on NFC
+            # In mock mode: nfc_id alone determines phone status, box_open is independent
+            # In physical mode: box_open can affect phone detection
+            if self.mock_mode_active:
+                # Mock mode: box_open doesn't affect phone status
+                if sensor.nfc_id:
+                    if self.state.phone_status != PhoneStatus.LOCKED:
+                        self._throttled_log('phone_locked', "[STATUS] ✓ Phone locked in box", force=True)
+                    self.state.phone_status = PhoneStatus.LOCKED
                 else:
-                    self.state.phone_status = PhoneStatus.REMOVED
+                    if self.state.phone_status == PhoneStatus.LOCKED:
+                        self.state.phone_status = PhoneStatus.REMOVED
+                        self._throttled_log('phone_removed', "[ALERT] ⚠️  Phone removed from box!", force=True)
+                    else:
+                        self.state.phone_status = PhoneStatus.REMOVED
+            else:
+                # Physical mode: box_open can affect phone detection (legacy logic)
+                if sensor.nfc_id and not sensor.box_open:
+                    if self.state.phone_status != PhoneStatus.LOCKED:
+                        self._throttled_log('phone_locked', "[STATUS] ✓ Phone locked in box", force=True)
+                    self.state.phone_status = PhoneStatus.LOCKED
+                elif not sensor.nfc_id or sensor.box_open:
+                    if self.state.phone_status == PhoneStatus.LOCKED:
+                        self.state.phone_status = PhoneStatus.REMOVED
+                        self._throttled_log('phone_removed', "[ALERT] ⚠️  Phone removed from box!", force=True)
+                    else:
+                        self.state.phone_status = PhoneStatus.REMOVED
             
             # Update presence status based on radar
             if sensor.radar_presence:
@@ -431,14 +453,23 @@ class SocketManager:
     async def pause_focus_session(self):
         """Pause the current focus session (v1.0 new feature)."""
         if self.state.session and self.state.session.status == SessionStatus.ACTIVE:
+            # Record the pause time
+            self.state.session.paused_at = datetime.now()
             self.state.session.status = SessionStatus.PAUSED
             await self.sio.emit('command', {'command': 'PAUSE'})
-            print("[專注協定] 專注任務已暫停")
+            print(f"[專注協定] 專注任務已暫停 - 暫停時間: {self.state.session.paused_at.isoformat()}")
             await self.broadcast_state(force=True)
     
     async def resume_focus_session(self):
         """Resume a paused focus session (v1.0 new feature)."""
         if self.state.session and self.state.session.status == SessionStatus.PAUSED:
+            if self.state.session.paused_at:
+                # Calculate paused duration and add to total
+                paused_duration = (datetime.now() - self.state.session.paused_at).total_seconds()
+                self.state.session.total_paused_seconds += int(paused_duration)
+                print(f"[專注協定] 本次暫停時長: {int(paused_duration)}秒, 累計暫停: {self.state.session.total_paused_seconds}秒")
+                self.state.session.paused_at = None
+            
             self.state.session.status = SessionStatus.ACTIVE
             await self.sio.emit('command', {'command': 'RESUME'})
             print("[專注協定] 專注任務已恢復")
@@ -459,6 +490,8 @@ class SocketManager:
                 state_dict['session']['start_time'] = self.state.session.start_time.isoformat()
             if self.state.session.end_time:
                 state_dict['session']['end_time'] = self.state.session.end_time.isoformat()
+            if self.state.session.paused_at:
+                state_dict['session']['paused_at'] = self.state.session.paused_at.isoformat()
         if self.state.person_away_since:
             state_dict['person_away_since'] = self.state.person_away_since.isoformat()
         # Convert enums to values
@@ -523,7 +556,10 @@ class SocketManager:
                 'mock_state': self.mock_state.to_dict(),
                 'nfc_detected': True,
                 'ldr_detected': True,
-                'radar_detected': True
+                'hall_detected': True,
+                'ir_detected': True,
+                'radar_detected': True,
+                'lcd_detected': 'lcd' in self.hardware_features
             })
             return
         
@@ -557,7 +593,10 @@ class SocketManager:
                 'mock_state': self.mock_state.to_dict(),
                 'nfc_detected': True,  # Mock hardware always has NFC
                 'ldr_detected': True,  # Mock hardware always has LDR
-                'radar_detected': True  # Mock hardware always has radar
+                'hall_detected': True,  # v1.0: KY-033 IR sensor field
+                'ir_detected': True,   # Also provide ir_detected for frontend compatibility
+                'radar_detected': True,  # Mock hardware always has radar
+                'lcd_detected': 'lcd' in self.hardware_features
             })
             
             # Send initial sensor data immediately for instant feedback
@@ -618,7 +657,10 @@ class SocketManager:
                     'mock_state': self.mock_state.to_dict(),
                     'nfc_detected': self.physical_nfc_detected,
                     'ldr_detected': self.physical_ldr_detected,
+                    'hall_detected': self.physical_ldr_detected,
+                    'ir_detected': self.physical_ldr_detected,
                     'radar_detected': self.physical_radar_detected,
+                    'lcd_detected': 'lcd' in self.hardware_features,
                     'last_sensor_data': self.state.last_sensor_data.model_dump() if self.state.last_sensor_data else None
                 })
             else:
@@ -631,7 +673,10 @@ class SocketManager:
                     'mock_state': self.mock_state.to_dict(),
                     'nfc_detected': False,
                     'ldr_detected': False,
-                    'radar_detected': False
+                    'hall_detected': False,
+                    'ir_detected': False,
+                    'radar_detected': False,
+                    'lcd_detected': False
                 })
         except Exception as e:
             print(f"[MOCK ERROR] Error during stop: {e}")
@@ -702,7 +747,10 @@ class SocketManager:
                 'mock_state': self.mock_state.to_dict(),
                 'nfc_detected': nfc_detected,
                 'ldr_detected': ldr_detected,
-                'radar_detected': radar_detected
+                'hall_detected': ldr_detected,  # v1.0: KY-033 IR sensor field
+                'ir_detected': ldr_detected,    # Also provide ir_detected for frontend compatibility
+                'radar_detected': radar_detected,
+                'lcd_detected': 'lcd' in self.hardware_features
             })
             
             # If mock mode is active, immediately send sensor data with new state

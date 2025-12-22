@@ -503,9 +503,11 @@ class SocialManager:
     async def _get_random_selected_image(self) -> Optional[str]:
         """從已選取的照片中隨機選擇一張"""
         try:
-            # 讀取 metadata 檔案
-            metadata_file = Path("backend/hostage_evidence/metadata.json")
+            # 讀取 metadata 檔案 - use path relative to this file
+            base_path = Path(__file__).parent.parent.parent / "hostage_evidence"
+            metadata_file = base_path / "metadata.json"
             if not metadata_file.exists():
+                print(f"[SocialManager] metadata file not found: {metadata_file}")
                 return None
             
             import json
@@ -516,7 +518,7 @@ class SocialManager:
             selected_images = []
             for image_id, data in metadata.items():
                 if data.get('selected', False):
-                    image_path = Path("backend/hostage_evidence") / data['filename']
+                    image_path = base_path / data['filename']
                     if image_path.exists():
                         selected_images.append(str(image_path))
             

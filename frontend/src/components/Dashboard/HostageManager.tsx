@@ -14,9 +14,11 @@ interface HostageImage {
 
 interface HostageManagerProps {
   disabled?: boolean
+  sessionActive?: boolean
+  onUploadComplete?: (files: string[]) => void
 }
 
-export function HostageManager({ disabled }: HostageManagerProps) {
+export function HostageManager({ disabled, sessionActive, onUploadComplete }: HostageManagerProps) {
   const [dragActive, setDragActive] = useState(false)
   const [images, setImages] = useState<HostageImage[]>([])
   const [uploading, setUploading] = useState(false)

@@ -7,25 +7,25 @@
 
 @layer base {
   :root {
-    --background: 220 13% 13%;
-    --foreground: 0 0% 100%;
-    --card: 220 13% 18%;
-    --card-foreground: 0 0% 100%;
-    --popover: 220 13% 18%;
-    --popover-foreground: 0 0% 100%;
-    --primary: 212 100% 50%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 142 76% 56%;
-    --secondary-foreground: 0 0% 0%;
-    --muted: 220 13% 25%;
-    --muted-foreground: 0 0% 63%;
-    --accent: 212 100% 50%;
-    --accent-foreground: 0 0% 100%;
-    --destructive: 10 100% 60%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 0 0% 100% / 0.1;
-    --input: 0 0% 100% / 0.1;
-    --ring: 212 100% 50%;
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
     --radius: 0.75rem;
   }
 }
@@ -41,25 +41,11 @@
     min-height: 100vh;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    cursor: none; /* Hide system cursor - custom cursor will be shown */
   }
   
   #root {
     min-height: 100vh;
-  }
-  
-  /* Hide default cursor globally for custom cursor - with exceptions */
-  * {
-    cursor: none !important;
-  }
-  
-  /* Allow text cursor for input fields */
-  input, textarea, [contenteditable] {
-    cursor: text !important;
-  }
-  
-  /* Allow pointer for links and buttons (custom cursor will still show) */
-  a, button, [role="button"] {
-    cursor: none !important;
   }
 }
 
@@ -437,3 +423,20 @@
 .transition-luxury {
   transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 }
+
+/* Scanline Effect */
+.bg-scanline {
+  background: linear-gradient(
+    to bottom,
+    transparent 50%,
+    rgba(0, 0, 0, 0.5) 51%
+  );
+  background-size: 100% 4px;
+  animation: scanline 0.2s linear infinite;
+}
+
+@keyframes scanline {
+  0% { background-position: 0 0; }
+  100% { background-position: 0 4px; }
+}
+
