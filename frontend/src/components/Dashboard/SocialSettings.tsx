@@ -1,7 +1,12 @@
+/**
+ * 社交平台與處罰協定設定 (SocialSettings)
+ * 負責設定違規時用於「公開處刑」的社群平台憑證與訊息內容。
+ * 支援 Discord (Webhook) 與 Gmail (App Password)。
+ * 核心邏輯包括憑證存儲、登入狀態查詢、以及各平台特定的自定義訊息設定。
+ */
 import { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -11,6 +16,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Skull, Save, LogIn, KeyRound, LogOut, CheckCircle, XCircle, AlertCircle, X, ChevronDown, ChevronUp, HelpCircle } from 'lucide-react'
 
 import { DiscordIcon, GmailIcon } from '@/components/Icons'
+import { api } from '@/lib/api'
+import { useLanguage } from '@/context/LanguageContext'
 
 interface PenaltySettings {
   enabled_platforms: string[]
@@ -25,18 +32,17 @@ interface SocialSettingsProps {
   onSave: (settings: PenaltySettings) => void
 }
 
+// 定義支援的社交平台及其基本屬性
+// 定義支援的社交平台及其基本屬性
 const PLATFORMS = [
-  { id: 'discord', name: 'Discord', icon: <DiscordIcon className="w-6 h-6" />, color: 'text-indigo-400', description: 'Webhook 訊息' },
-  { id: 'gmail', name: 'Gmail', icon: <GmailIcon className="w-6 h-6" />, color: 'text-red-400', description: '電子郵件' },
+  { id: 'discord', name: 'Discord', icon: <DiscordIcon className="w-6 h-6" />, color: 'text-indigo-400', descriptionKey: 'socialSettings.discordWebhook' },
+  { id: 'gmail', name: 'Gmail', icon: <GmailIcon className="w-6 h-6" />, color: 'text-red-400', descriptionKey: 'socialSettings.email' },
 ]
 
-const DEFAULT_MESSAGES: Record<string, string> = {
-  discord: '🚨 警報：我違反了專注協定，剛才的專注挑戰失敗了。請大家監督我改進！ 🚨',
-  threads: '📢 系統公告：我未能完成專注任務，違反了自律協定。我會繼續努力改進。',
-  gmail: '📧 專注執法者通報：我未能完成專注任務，將加強自我管理。'
-}
+
 
 export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
+  const { t } = useLanguage()
   const [localSettings, setLocalSettings] = useState<PenaltySettings>(settings)
   const [hasChanges, setHasChanges] = useState(false)
   const [loginLoading, setLoginLoading] = useState<string | null>(null)
@@ -44,8 +50,12 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
   const [loginError, setLoginError] = useState<string | null>(null)
   const [newRecipient, setNewRecipient] = useState<string>('')
   const [expandedGuide, setExpandedGuide] = useState<string | null>(null)
+  // 追蹤正在登出的平台，用於暫停輪詢避免狀態覆蓋
+  const [isLoggingOut, setIsLoggingOut] = useState<string | null>(null)
+  // 追蹤正在登入的平台，用於暫停輪詢避免狀態覆蓋
+  const [isLoggingIn, setIsLoggingIn] = useState<string | null>(null)
 
-  // 登入表單狀態
+  // 管理各類登入表單的狀態
   const [showLoginForm, setShowLoginForm] = useState<string | null>(null)
   const [gmailForm, setGmailForm] = useState({ email: '', appPassword: '' })
   const [threadsForm, setThreadsForm] = useState({ userId: '', accessToken: '' })
@@ -53,199 +63,188 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
   const [threadsLoginMode, setThreadsLoginMode] = useState<'simple' | 'advanced'>('advanced')
   const [discordForm, setDiscordForm] = useState({ webhookUrl: '' })
 
-  // Fetch login status for all platforms
+  // 從後端 API 同步各平台的登入/憑證設定狀態
   const fetchLoginStatus = useCallback(async () => {
     try {
-      const response = await fetch('/api/social/login-status')
-      if (response.ok) {
-        const status = await response.json()
-        setLoginStatus(status)
-      }
+      const status = await api.get<Record<string, boolean>>('/api/social/login-status')
+      setLoginStatus(status)
     } catch (error) {
       console.error('[社交登入] 無法獲取登入狀態:', error)
     }
   }, [])
 
-  // Fetch login status on mount and periodically
+  // 元件掛載時執行，並每 10 秒自動輪詢一次，確保 UI 狀態與伺服器一致
+  // 登入/登出期間暫停輪詢，避免覆蓋樂觀更新的狀態
   useEffect(() => {
     fetchLoginStatus()
-    const interval = setInterval(fetchLoginStatus, 10000) // Refresh every 10 seconds
+    const interval = setInterval(() => {
+      if (!isLoggingOut && !isLoggingIn) {
+        fetchLoginStatus()
+      }
+    }, 10000)
     return () => clearInterval(interval)
-  }, [fetchLoginStatus])
+  }, [fetchLoginStatus, isLoggingOut, isLoggingIn])
 
-  // 開啟社群平台登入頁面
+  // 處理點擊登入：顯示表單並同步展開對應的教學指南
   const handleLogin = async (platformId: string) => {
-    // 改為顯示登入表單而非開啟外部頁面
     setShowLoginForm(platformId)
-    // 同時展開教學指南，讓使用者可以同時看到說明和輸入欄位
     setExpandedGuide(platformId)
     setLoginError(null)
   }
 
-  // 提交登入憑證
+  // 提交憑證至伺服器
   const handleSubmitCredentials = async (platformId: string) => {
     setLoginLoading(platformId)
     setLoginError(null)
+    // 標記正在登入，暫停輪詢避免狀態被覆蓋
+    setIsLoggingIn(platformId)
 
     try {
-      let response
-
       if (platformId === 'gmail') {
         if (!gmailForm.email || !gmailForm.appPassword) {
-          setLoginError('請填寫所有欄位')
+          setLoginError(t('socialSettings.alertFillAll'))
           setLoginLoading(null)
+          setIsLoggingIn(null)
           return
         }
-        response = await fetch('/api/social/credentials/gmail', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: gmailForm.email,
-            app_password: gmailForm.appPassword
-          })
+        await api.post('/api/social/credentials/gmail', {
+          email: gmailForm.email,
+          app_password: gmailForm.appPassword
         })
       } else if (platformId === 'threads') {
         if (threadsLoginMode === 'simple') {
-          // 簡單模式：使用帳號密碼
+          // 簡單模式（即將廢棄）：直接使用帳號密碼，模擬網頁行為
           if (!threadsBrowserForm.username || !threadsBrowserForm.password) {
             setLoginError('請填寫所有欄位')
             setLoginLoading(null)
+            setIsLoggingIn(null)
             return
           }
-          response = await fetch('/api/social/credentials/threads/browser', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              username: threadsBrowserForm.username,
-              password: threadsBrowserForm.password
-            })
+          await api.post('/api/social/credentials/threads/browser', {
+            username: threadsBrowserForm.username,
+            password: threadsBrowserForm.password
           })
         } else {
-          // 進階模式：使用 API token
+          // 進階模式（推薦）：使用官方 API Token，安全性更高且穩定
           if (!threadsForm.userId || !threadsForm.accessToken) {
             setLoginError('請填寫所有欄位')
             setLoginLoading(null)
+            setIsLoggingIn(null)
             return
           }
-          response = await fetch('/api/social/credentials/threads', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              user_id: threadsForm.userId,
-              access_token: threadsForm.accessToken
-            })
+          await api.post('/api/social/credentials/threads', {
+            user_id: threadsForm.userId,
+            access_token: threadsForm.accessToken
           })
         }
       } else if (platformId === 'discord') {
         if (!discordForm.webhookUrl) {
-          setLoginError('請填寫 Webhook URL')
+          setLoginError(t('socialSettings.alertFillWebhook'))
           setLoginLoading(null)
+          setIsLoggingIn(null)
           return
         }
-        response = await fetch('/api/social/credentials/discord', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            webhook_url: discordForm.webhookUrl
-          })
+        await api.post('/api/social/credentials/discord', {
+          webhook_url: discordForm.webhookUrl
         })
       }
 
-      if (response && response.ok) {
-        console.log(`[社交登入] ${platformId} 憑證已設定`)
+      console.log(`[社交登入] ${platformId} 憑證已設定`)
 
-        // Add delay to allow socket state to update
-        await new Promise(resolve => setTimeout(resolve, 1000))
+      // 樂觀更新：立即假設設定成功，提升 UI 反應速度
+      setLoginStatus(prev => ({ ...prev, [platformId]: true }))
+      setShowLoginForm(null)
+      setExpandedGuide(null)
 
-        setLoginStatus(prev => ({ ...prev, [platformId]: true }))
-        setShowLoginForm(null)
-        setExpandedGuide(null) // 關閉教學指南
-
-        // Clear form
-        if (platformId === 'gmail') setGmailForm({ email: '', appPassword: '' })
-        if (platformId === 'threads') {
-          setThreadsForm({ userId: '', accessToken: '' })
-          setThreadsBrowserForm({ username: '', password: '' })
-        }
-        if (platformId === 'discord') setDiscordForm({ webhookUrl: '' })
-
-        // Refresh login status with retry
-        let retries = 3
-        while (retries > 0) {
-          try {
-            await fetchLoginStatus()
-            break
-          } catch (error) {
-            retries--
-            if (retries === 0) {
-              console.error(`[社交登入] 獲取狀態失敗:`, error)
-            } else {
-              await new Promise(resolve => setTimeout(resolve, 1000))
-            }
-          }
-        }
-      } else {
-        const data = await response?.json()
-        setLoginError(data?.detail || data?.message || '設定憑證失敗')
+      // 重置表單狀態
+      if (platformId === 'gmail') setGmailForm({ email: '', appPassword: '' })
+      if (platformId === 'threads') {
+        setThreadsForm({ userId: '', accessToken: '' })
+        setThreadsBrowserForm({ username: '', password: '' })
       }
+      if (platformId === 'discord') setDiscordForm({ webhookUrl: '' })
     } catch (error) {
-      setLoginError(`網路錯誤: ${error}`)
+      setLoginError(t('socialSettings.alertNetworkError', { error: String(error) }))
       console.error(`[社交登入] 錯誤:`, error)
     } finally {
       setLoginLoading(null)
+      // 延遲清除登入標記，確保狀態穩定後才恢復輪詢
+      setTimeout(() => {
+        setIsLoggingIn(null)
+      }, 1000)
     }
   }
 
-  // 登出平台
+  // 處理登出：清除伺服器端存儲的加密憑證檔案
   const handleLogout = async (platformId: string) => {
     setLoginLoading(`logout-${platformId}`)
+    // 標記正在登出，暫停輪詢避免狀態被覆蓋
+    setIsLoggingOut(platformId)
+
+    // 樂觀更新：立即假設登出成功，提升 UI 反應速度
+    // setLoginStatus(prev => ({ ...prev, [platformId]: false }))
+
+    // 自動從啟用平台列表中移除
+    setLocalSettings(prev => ({
+      ...prev,
+      enabled_platforms: prev.enabled_platforms.filter(p => p !== platformId)
+    }))
+    setHasChanges(true)
+
     try {
-      const response = await fetch(`/api/social/logout/${platformId}`, {
-        method: 'POST',
-      })
-      const data = await response.json()
-      if (response.ok && data.success) {
+      const data = await api.post<{ success: boolean }>(`/api/social/logout/${platformId}`)
+      if (data.success) {
         console.log(`[社交登入] 已登出 ${platformId}`)
-        setLoginStatus(prev => ({ ...prev, [platformId]: false }))
-        // Remove from enabled platforms if logged out
-        if (localSettings.enabled_platforms.includes(platformId)) {
-          setLocalSettings(prev => ({
-            ...prev,
-            enabled_platforms: prev.enabled_platforms.filter(p => p !== platformId)
-          }))
-          setHasChanges(true)
-        }
+      } else {
+        // 如果後端返回失敗（極少見），恢復狀態
+        console.warn(`[社交登入] 登出失敗，正在恢復狀態`)
+        setLoginStatus(prev => ({ ...prev, [platformId]: true }))
       }
     } catch (error) {
       console.error(`[社交登入] 登出錯誤:`, error)
+      // 發生錯誤時恢復狀態
+      setLoginStatus(prev => ({ ...prev, [platformId]: true }))
     } finally {
       setLoginLoading(null)
+      // 延遲清除登出標記，確保狀態穩定後才恢復輪詢
+      setTimeout(() => {
+        setIsLoggingOut(null)
+      }, 1000)
     }
   }
 
   useEffect(() => {
-    // 只在使用者沒有未儲存變更時，才同步後端設定
-    // 避免 WebSocket 頻繁更新覆蓋使用者的本地修改
+    // 樂觀鎖機制：只在使用者沒有未儲存變更時，才從後端同步設定。
+    // 避免 WebSocket 背景推送覆蓋掉使用者正在編輯的內容。
     if (!hasChanges && settings) {
       setLocalSettings(settings)
     }
   }, [settings, hasChanges])
 
-  const handlePlatformToggle = (platformId: string, checked: boolean) => {
-    // Prevent enabling if not logged in
-    if (checked && !loginStatus[platformId]) {
-      setLoginError(`請先登入 ${platformId} 才能啟用此平台`)
+  // 自動同步 enabled_platforms：綁定憑證即視為啟用該平台
+  // 登入/登出期間不執行同步，避免狀態快速切換
+  useEffect(() => {
+    // 如果正在登出或登入，跳過同步
+    if (isLoggingOut || isLoggingIn) {
       return
     }
 
-    const newPlatforms = checked
-      ? [...localSettings.enabled_platforms, platformId]
-      : localSettings.enabled_platforms.filter(p => p !== platformId)
+    const enabledPlatforms = Object.entries(loginStatus)
+      .filter(([, isLoggedIn]) => isLoggedIn)
+      .map(([platform]) => platform)
 
-    setLocalSettings(prev => ({ ...prev, enabled_platforms: newPlatforms }))
-    setHasChanges(true)
-    setLoginError(null)
-  }
+    // 只有當平台列表有變化時才更新
+    const currentEnabled = [...localSettings.enabled_platforms].sort().join(',')
+    const newEnabled = [...enabledPlatforms].sort().join(',')
+
+    if (currentEnabled !== newEnabled) {
+      setLocalSettings(prev => ({
+        ...prev,
+        enabled_platforms: enabledPlatforms
+      }))
+      setHasChanges(true)
+    }
+  }, [loginStatus, isLoggingOut, isLoggingIn])
 
   const handleMessageChange = (platform: string, message: string) => {
     setLocalSettings(prev => ({
@@ -283,23 +282,24 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
     return PLATFORMS.find(p => p.id === id)
   }
 
+  // 渲染各平台的教學指南內容，引導使用者完成複雜的 API/Webhook 設定
   const renderGuideContent = (platformId: string) => {
     if (platformId === 'gmail') {
       return (
         <div className="space-y-3 text-xs text-muted-foreground">
           <div>
-            <p className="font-semibold text-white mb-1">📧 如何取得 Gmail 應用程式密碼：</p>
+            <p className="font-semibold text-white mb-1">{t('socialSettings.guideGmailPassword')}</p>
             <ol className="list-decimal list-inside space-y-1 ml-2">
-              <li>前往 <a href="https://myaccount.google.com/" target="_blank" rel="noopener noreferrer" className="text-neon-blue hover:underline">Google 帳戶</a></li>
-              <li>點擊「安全性」→「兩步驟驗證」（需先啟用）</li>
-              <li>下滾至「應用程式密碼」</li>
-              <li>選擇「郵件」和「其他裝置」</li>
-              <li>輸入自訂名稱（如：IoT專注系統）</li>
-              <li>複製產生的 16 位密碼</li>
+              <li><span dangerouslySetInnerHTML={{ __html: t('socialSettings.guideGmailStep1') }} /></li>
+              <li>{t('socialSettings.guideGmailStep2')}</li>
+              <li>{t('socialSettings.guideGmailStep3')}</li>
+              <li>{t('socialSettings.guideGmailStep4')}</li>
+              <li>{t('socialSettings.guideGmailStep5')}</li>
+              <li>{t('socialSettings.guideGmailStep6')}</li>
             </ol>
           </div>
           <div className="p-2 bg-yellow-500/10 border border-yellow-500/30 rounded">
-            <p className="text-yellow-300">💡 提示：應用程式密碼只會顯示一次，請妥善保存</p>
+            <p className="text-yellow-300">{t('socialSettings.guideGmailTip')}</p>
           </div>
         </div>
       )
@@ -307,7 +307,7 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
       return (
         <div className="space-y-3 text-xs text-muted-foreground">
           <div>
-            <p className="font-semibold text-white mb-1">🔧 進階模式 - 官方 API（推薦）：</p>
+            <p className="font-semibold text-white mb-1">進階模式 - 官方 API（推薦）：</p>
             <ol className="list-decimal list-inside space-y-1 ml-2">
               <li>前往 <a href="https://developers.facebook.com/" target="_blank" rel="noopener noreferrer" className="text-neon-blue hover:underline">Meta for Developers</a></li>
               <li>建立應用程式（類型選擇「商業」）</li>
@@ -318,10 +318,10 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
             </ol>
           </div>
           <div className="p-2 bg-green-500/10 border border-green-500/30 rounded">
-            <p className="text-green-300">✅ 優點：100% 安全，不會被封鎖，長期穩定</p>
+            <p className="text-green-300">優點：100% 安全，不會被封鎖，長期穩定</p>
           </div>
           <div className="border-t border-border/30 pt-3 mt-3">
-            <p className="font-semibold text-white mb-1">⚠️ 簡單模式 - 帳號密碼（有風險）：</p>
+            <p className="font-semibold text-white mb-1">簡單模式 - 帳號密碼（有風險）：</p>
             <p className="text-red-300">使用 Instagram/Threads 帳號密碼登入，可能被偵測為機器人行為，建議僅用於測試。</p>
           </div>
         </div>
@@ -330,18 +330,18 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
       return (
         <div className="space-y-3 text-xs text-muted-foreground">
           <div>
-            <p className="font-semibold text-white mb-1">🎮 如何取得 Discord Webhook URL：</p>
+            <p className="font-semibold text-white mb-1">{t('socialSettings.guideDiscordWebhook')}</p>
             <ol className="list-decimal list-inside space-y-1 ml-2">
-              <li>開啟 Discord，前往您要發送訊息的頻道</li>
-              <li>點擊頻道設定（齒輪圖示）→「整合」</li>
-              <li>點擊「建立 Webhook」或選擇現有 Webhook</li>
-              <li>自訂 Webhook 名稱和頭像（可選）</li>
-              <li>點擊「複製 Webhook URL」</li>
-              <li>將 URL 貼入下方欄位</li>
+              <li>{t('socialSettings.guideDiscordStep1')}</li>
+              <li>{t('socialSettings.guideDiscordStep2')}</li>
+              <li>{t('socialSettings.guideDiscordStep3')}</li>
+              <li>{t('socialSettings.guideDiscordStep4')}</li>
+              <li>{t('socialSettings.guideDiscordStep5')}</li>
+              <li>{t('socialSettings.guideDiscordStep6')}</li>
             </ol>
           </div>
           <div className="p-2 bg-blue-500/10 border border-blue-500/30 rounded">
-            <p className="text-blue-300">💡 提示：Webhook URL 格式為 https://discord.com/api/webhooks/...</p>
+            <p className="text-blue-300">{t('socialSettings.guideDiscordTip')}</p>
           </div>
         </div>
       )
@@ -349,7 +349,7 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
     return null
   }
 
-
+  // 渲染單個平台的卡片 UI，整合狀態顯示與設定按鈕
   const renderPlatformCard = (platform: typeof PLATFORMS[0]) => {
     const isLoggedIn = loginStatus[platform.id] || false
     const isEnabled = localSettings.enabled_platforms.includes(platform.id)
@@ -372,7 +372,7 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
               <span className={`text-base font-medium ${platform.color} block`}>
                 {platform.name}
               </span>
-              <span className="text-xs text-muted-foreground">{platform.description}</span>
+              <span className="text-xs text-muted-foreground">{t(platform.descriptionKey)}</span>
             </div>
           </div>
           <Badge
@@ -383,29 +383,16 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
               }`}
           >
             {isLoggedIn ? (
-              <><CheckCircle className="w-3 h-3 mr-1" />已設定</>
+              <><CheckCircle className="w-3 h-3 mr-1" />{t('socialSettings.configured')}</>
             ) : (
-              <><XCircle className="w-3 h-3 mr-1" />未設定</>
+              <><XCircle className="w-3 h-3 mr-1" />{t('socialSettings.notConfigured')}</>
             )}
           </Badge>
         </div>
 
-        <div
-          className={`flex items-center gap-3 py-2 px-2 rounded ${isLoggedIn ? 'cursor-pointer hover:bg-white/5' : 'cursor-not-allowed bg-yellow-500/10'}`}
-          onClick={() => isLoggedIn && handlePlatformToggle(platform.id, !isEnabled)}
-        >
-          <Checkbox
-            checked={isEnabled}
-            disabled={!isLoggedIn}
-            onCheckedChange={(checked) => handlePlatformToggle(platform.id, !!checked)}
-          />
-          <span className={`text-sm font-medium ${isLoggedIn ? 'text-white' : 'text-yellow-300'
-            }`}>
-            {isLoggedIn ? '啟用此平台' : '⚠️ 請先設定憑證才能啟用'}
-          </span>
-        </div>
 
-        {/* 教學指南 - 未登入時顯示，開始設定時自動展開 */}
+
+        {/* 若未登入，顯示展開式教學指南，引導使用者完成初步設定 */}
         {!isLoggedIn && (
           <div className="space-y-3 mt-4 pt-3 border-t border-border/50">
             <div>
@@ -415,7 +402,7 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
               >
                 <span className="flex items-center gap-2 text-sm font-medium text-blue-300">
                   <HelpCircle className="w-4 h-4" />
-                  📖 {platform.name} 設定教學（點擊展開/收合）
+                  {t('socialSettings.setupGuideExpand', { platform: platform.name })}
                 </span>
                 {expandedGuide === platform.id ? (
                   <ChevronUp className="w-4 h-4 text-blue-300" />
@@ -432,7 +419,7 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
           </div>
         )}
 
-        {/* 設定按鈕 - 只在未登入且未顯示表單時顯示 */}
+        {/* 設定按鈕 - 觸發對應平台的登入表單顯示 */}
         {!isLoggedIn && !showForm && (
           <div className="flex flex-col sm:flex-row gap-3 mt-4">
             <Button
@@ -446,18 +433,18 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
               disabled={loginLoading === platform.id}
             >
               <LogIn className="w-4 h-4 mr-2" />
-              🔧 開始設定憑證
+              {t('socialSettings.startSetup')}
             </Button>
           </div>
         )}
 
-        {/* 顯示登入表單 */}
+        {/* 平台特定的登入表單：Gmail、Threads 或 Discord */}
         {showForm && (
           <div className="mt-4 pt-4 space-y-3 bg-cyber-darker/30 p-4 rounded-lg border border-blue-500/20">
             {platform.id === 'gmail' && (
               <>
                 <div>
-                  <Label className="text-sm mb-2 block text-white font-medium">Gmail 帳號</Label>
+                  <Label className="text-sm mb-2 block text-white font-medium">{t('socialSettings.gmailAccount')}</Label>
                   <Input
                     type="email"
                     value={gmailForm.email}
@@ -466,16 +453,15 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
                   />
                 </div>
                 <div>
-                  <Label className="text-sm mb-2 block text-white font-medium">應用程式密碼</Label>
+                  <Label className="text-sm mb-2 block text-white font-medium">{t('socialSettings.appPassword')}</Label>
                   <Input
                     type="password"
                     value={gmailForm.appPassword}
                     onChange={(e) => setGmailForm(prev => ({ ...prev, appPassword: e.target.value }))}
-                    placeholder="應用程式密碼（16位）"
+                    placeholder={t('socialSettings.appPasswordPlaceholder')}
                   />
                   <p className="text-xs text-blue-300 mt-2 flex items-start gap-1">
-                    <span>💡</span>
-                    <span>在 Google 帳戶設定中生成應用程式密碼（參考上方教學）</span>
+                    <span>{t('socialSettings.appPasswordHint')}</span>
                   </p>
                 </div>
               </>
@@ -483,12 +469,12 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
 
             {platform.id === 'threads' && (
               <>
-                {/* 重要安全提示 */}
+                {/* Threads 模式切換與安全警示 */}
                 <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 mb-3">
                   <div className="flex items-start gap-2">
                     <AlertCircle className="w-4 h-4 text-yellow-400 mt-0.5 flex-shrink-0" />
                     <div className="text-xs space-y-1">
-                      <p className="text-yellow-200 font-medium">⚠️ 安全建議</p>
+                      <p className="text-yellow-200 font-medium">安全建議</p>
                       <p className="text-yellow-200/80">
                         <strong className="text-yellow-300">推薦使用「進階模式」（官方 API）</strong><br />
                         • 簡單模式可能被 Meta 偵測為機器人<br />
@@ -499,7 +485,6 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
                   </div>
                 </div>
 
-                {/* 模式切換按鈕 */}
                 <div className="flex items-center gap-2 p-2 bg-cyber-darker/50 rounded border border-border/30">
                   <button
                     onClick={() => setThreadsLoginMode('advanced')}
@@ -508,7 +493,7 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
                       : 'text-muted-foreground hover:text-foreground'
                       }`}
                   >
-                    ✅ 進階模式（推薦）
+                    進階模式（推薦）
                   </button>
                   <button
                     onClick={() => setThreadsLoginMode('simple')}
@@ -517,17 +502,15 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
                       : 'text-muted-foreground hover:text-foreground'
                       }`}
                   >
-                    ⚠️ 簡單模式（有風險）
+                    簡單模式（有風險）
                   </button>
                 </div>
 
                 {threadsLoginMode === 'simple' ? (
                   <>
-                    {/* 簡單模式的額外警告 */}
                     <div className="p-2.5 rounded bg-red-500/10 border border-red-500/30">
                       <p className="text-xs text-red-300">
-                        <strong>⚠️ 風險警告：</strong>使用帳號密碼登入可能導致帳號被 Instagram/Threads 系統判定為機器人。
-                        建議僅用於測試，或使用測試帳號。正式使用請選擇「進階模式」。
+                        <strong>風險警告：</strong>使用帳號密碼登入可能導致帳號被 Instagram/Threads 系統判定為機器人。
                       </p>
                     </div>
                     <div>
@@ -549,38 +532,14 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
                           placeholder="密碼"
                           className="pr-10"
                         />
-                        <button
-                          type="button"
-                          className="absolute right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                          onClick={() => {
-                            const input = document.querySelector('input[type="password"]') as HTMLInputElement;
-                            if (input) {
-                              input.type = input.type === 'password' ? 'text' : 'password';
-                            }
-                          }}
-                        >
-                          👁️
-                        </button>
                       </div>
-                      <p className="text-xs text-red-300 mt-2 flex items-start gap-1">
-                        <span>⚠️</span>
-                        <span>不建議用於重要帳號（參考上方教學使用進階模式）</span>
-                      </p>
                     </div>
                   </>
                 ) : (
                   <>
                     <div className="p-2.5 rounded bg-green-500/10 border border-green-500/30 mb-2">
                       <p className="text-xs text-green-300">
-                        ✅ <strong>安全推薦：</strong>使用 Meta 官方 API 是最安全的方式，不會有封鎖風險。
-                        <a
-                          href="https://developers.facebook.com/docs/threads"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="underline ml-1 hover:text-green-200"
-                        >
-                          查看設定教學
-                        </a>
+                        <strong>安全推薦：</strong>使用 Meta 官方 API 是最安全的方式。
                       </p>
                     </div>
                     <div>
@@ -600,10 +559,6 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
                         placeholder="Threads API Access Token"
                         className="min-h-[80px]"
                       />
-                      <p className="text-xs text-green-300 mt-2 flex items-start gap-1">
-                        <span>✅</span>
-                        <span>官方認可方式，安全可靠，從 Meta Developer 後台取得（參考上方教學）</span>
-                      </p>
                     </div>
                   </>
                 )}
@@ -612,17 +567,13 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
 
             {platform.id === 'discord' && (
               <div>
-                <Label className="text-sm mb-2 block text-white font-medium">Webhook URL</Label>
+                <Label className="text-sm mb-2 block text-white font-medium">{t('socialSettings.webhookUrl')}</Label>
                 <Textarea
                   value={discordForm.webhookUrl}
                   onChange={(e) => setDiscordForm({ webhookUrl: e.target.value })}
-                  placeholder="https://discord.com/api/webhooks/..."
+                  placeholder={t('socialSettings.webhookPlaceholder')}
                   className="min-h-[80px]"
                 />
-                <p className="text-xs text-blue-300 mt-2 flex items-start gap-1">
-                  <span>💡</span>
-                  <span>在 Discord 頻道設定中建立 Webhook（參考上方教學）</span>
-                </p>
               </div>
             )}
 
@@ -634,7 +585,7 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
                 className="flex-1"
               >
                 <KeyRound className="w-4 h-4 mr-2" />
-                {loginLoading === platform.id ? '設定中...' : '確認設定'}
+                {t('socialSettings.confirmSetup')}
               </Button>
               <Button
                 size="sm"
@@ -642,35 +593,20 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
                 onClick={() => {
                   setShowLoginForm(null)
                   setExpandedGuide(null)
-                  // 清理表單
-                  if (platform.id === 'gmail') setGmailForm({ email: '', appPassword: '' })
-                  if (platform.id === 'threads') {
-                    setThreadsForm({ userId: '', accessToken: '' })
-                    setThreadsBrowserForm({ username: '', password: '' })
-                  }
-                  if (platform.id === 'discord') setDiscordForm({ webhookUrl: '' })
                 }}
                 disabled={loginLoading === platform.id}
               >
-                取消
+                {t('socialSettings.cancel')}
               </Button>
             </div>
           </div>
         )}
 
-        {/* 已登入時的操作區域：顯示成功提示和登出按鈕 */}
+        {/* 已登入且設定成功後的完成指示與登出入口 */}
         {isLoggedIn && (
           <div className="mt-4 pt-3 border-t border-border/50 space-y-3">
-            {/* 成功提示 */}
-            <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/30 flex items-center gap-2">
-              <CheckCircle className="w-4 h-4 text-green-400 flex-shrink-0" />
-              <div className="flex-1">
-                <p className="text-sm text-green-300 font-medium">✅ {platform.name} 已成功設定</p>
-                <p className="text-xs text-green-300/70 mt-0.5">您可以在上方勾選「啟用此平台」來開啟功能</p>
-              </div>
-            </div>
 
-            {/* 登出按鈕 */}
+
             <div className="flex flex-col sm:flex-row gap-2">
               <Button
                 size="sm"
@@ -683,14 +619,9 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
                 disabled={loginLoading === `logout-${platform.id}`}
               >
                 <LogOut className="w-4 h-4 mr-2" />
-                {loginLoading === `logout-${platform.id}` ? '登出中...' : '🔓 登出並清除憑證'}
+                {t('socialSettings.logoutAndClear')}
               </Button>
             </div>
-
-            {/* 重新設定提示 */}
-            <p className="text-xs text-muted-foreground/70 italic">
-              💡 提示：如需重新設定憑證，請先登出後再進行設定
-            </p>
           </div>
         )}
       </div>
@@ -702,27 +633,14 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-neon-red">
           <Skull className="w-5 h-5" />
-          <span className="uppercase tracking-wider font-chinese">社死協定設定</span>
+          <span className="uppercase tracking-wider font-chinese">{t('socialSettings.title')}</span>
         </CardTitle>
         <p className="text-xs text-muted-foreground font-chinese">
-          設定違規時將發佈羞恥貼文的平台 - 依 App 分類管理
+          {t('socialSettings.description')}
         </p>
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* 直接 API 整合資訊 */}
-        <div className="bg-cyber-darker/50 border border-neon-blue/20 rounded-lg p-4">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-neon-blue mt-0.5 flex-shrink-0" />
-            <div className="text-sm space-y-1">
-              <p className="text-muted-foreground font-chinese">
-                💡 <strong className="text-neon-blue">直接在網頁設定憑證</strong>
-              </p>
-              <p className="text-xs text-muted-foreground/70 font-chinese">
-                點擊「設定憑證」按鈕，輸入各平台的 API 認證資訊。系統會自動儲存，下次啟動時自動載入。
-              </p>
-            </div>
-          </div>
-        </div>
+
 
         {loginError && (
           <div className="p-3 rounded-lg bg-red-500/20 border border-red-500/50 flex items-center gap-2">
@@ -749,36 +667,36 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
             </TabsTrigger>
           </TabsList>
 
-          {/* Discord Tab */}
+          {/* Discord Tab：訊息編輯 */}
           <TabsContent value="discord" className="space-y-4">
             <div className="space-y-4">
               {getPlatformById('discord') && renderPlatformCard(getPlatformById('discord')!)}
               <div className="mt-4">
-                <Label className="text-xs text-muted-foreground font-chinese mb-2 block">自訂訊息</Label>
+                <Label className="text-xs text-muted-foreground font-chinese mb-2 block">{t('socialSettings.customMessage')}</Label>
                 <Textarea
-                  value={localSettings.custom_messages['discord'] || DEFAULT_MESSAGES['discord']}
+                  value={localSettings.custom_messages['discord'] || t('socialSettings.defaultMessageDiscord')}
                   onChange={(e) => handleMessageChange('discord', e.target.value)}
-                  placeholder="輸入 Discord 訊息..."
+                  placeholder={t('socialSettings.enterDiscordMessage')}
                   className="min-h-[100px] bg-[#1a1a1a] border-border/70 font-chinese text-white placeholder:text-gray-500"
                 />
               </div>
             </div>
           </TabsContent>
 
-          {/* Gmail Tab */}
+          {/* Gmail Tab：收件人與郵件内容 */}
           <TabsContent value="gmail" className="space-y-4">
             <div className="space-y-4">
               {getPlatformById('gmail') && renderPlatformCard(getPlatformById('gmail')!)}
 
               <div className="mt-4 space-y-4">
                 <div>
-                  <Label className="text-xs text-muted-foreground font-chinese mb-2 block">收件人列表</Label>
+                  <Label className="text-xs text-muted-foreground font-chinese mb-2 block">{t('socialSettings.recipientList')}</Label>
                   <div className="flex gap-2 mb-3">
                     <Input
                       type="email"
                       value={newRecipient}
                       onChange={(e) => setNewRecipient(e.target.value)}
-                      placeholder="輸入電子郵件地址..."
+                      placeholder={t('socialSettings.enterEmail')}
                       className="flex-1"
                       onKeyPress={(e) => e.key === 'Enter' && handleAddRecipient()}
                     />
@@ -787,7 +705,7 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
                       onClick={handleAddRecipient}
                       disabled={!newRecipient || !newRecipient.includes('@')}
                     >
-                      新增
+                      {t('socialSettings.add')}
                     </Button>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -807,17 +725,17 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
                       </Badge>
                     ))}
                     {(!localSettings.gmail_recipients || localSettings.gmail_recipients.length === 0) && (
-                      <span className="text-xs text-muted-foreground">尚未新增收件人</span>
+                      <span className="text-xs text-muted-foreground">{t('socialSettings.noRecipients')}</span>
                     )}
                   </div>
                 </div>
 
                 <div>
-                  <Label className="text-xs text-muted-foreground font-chinese mb-2 block">自訂郵件內容</Label>
+                  <Label className="text-xs text-muted-foreground font-chinese mb-2 block">{t('socialSettings.customEmailContent')}</Label>
                   <Textarea
-                    value={localSettings.custom_messages['gmail'] || DEFAULT_MESSAGES['gmail']}
+                    value={localSettings.custom_messages['gmail'] || t('socialSettings.defaultMessageGmail')}
                     onChange={(e) => handleMessageChange('gmail', e.target.value)}
-                    placeholder="輸入郵件內容..."
+                    placeholder={t('socialSettings.enterEmailContent')}
                     className="min-h-[100px] bg-[#1a1a1a] border-border/70 font-chinese text-white placeholder:text-gray-500"
                   />
                 </div>
@@ -826,13 +744,13 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
           </TabsContent>
         </Tabs>
 
-        {/* Options */}
+        {/* 全域處罰選項：是否在貼文中附加時間與違規次數 */}
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <Label className="font-chinese">包含時間戳</Label>
+              <Label className="font-chinese">{t('socialSettings.includeTimestamp')}</Label>
               <p className="text-xs text-muted-foreground font-chinese">
-                在貼文中加入違規時間
+                {t('socialSettings.includeTimestampDesc')}
               </p>
             </div>
             <Switch
@@ -846,9 +764,9 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
 
           <div className="flex items-center justify-between">
             <div>
-              <Label className="font-chinese">包含違規次數</Label>
+              <Label className="font-chinese">{t('socialSettings.includeViolationCount')}</Label>
               <p className="text-xs text-muted-foreground font-chinese">
-                顯示你失敗了幾次
+                {t('socialSettings.includeViolationCountDesc')}
               </p>
             </div>
             <Switch
@@ -861,7 +779,7 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
           </div>
         </div>
 
-        {/* Save Button */}
+        {/* 儲存按鈕：僅在 localSettings 有變動時才可點擊 */}
         <Button
           onClick={handleSave}
           disabled={!hasChanges}
@@ -869,7 +787,7 @@ export function SocialSettings({ settings, onSave }: SocialSettingsProps) {
           variant={hasChanges ? "default" : "outline"}
         >
           <Save className="w-4 h-4 mr-2" />
-          {hasChanges ? '儲存變更' : '無變更'}
+          {hasChanges ? t('socialSettings.saveChanges') : t('socialSettings.noChanges')}
         </Button>
       </CardContent>
     </Card>

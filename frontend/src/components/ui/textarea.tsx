@@ -1,16 +1,23 @@
+/**
+ * 多行輸入框 (Textarea)
+ * 針對深色主題與高級視覺感優化的組件。
+ * 特色：
+ * 1. 設置合理的最小高度 (min-h-[80px])，並具備優雅的狀態過渡動畫。
+ * 2. 採用特殊的 focus-visible 樣式，確保在深背景下依然清晰可辨。
+ */
 import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
 export interface TextareaProps
-  extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {}
+  extends React.TextareaHTMLAttributes<HTMLTextAreaElement> { }
 
 const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
   ({ className, ...props }, ref) => {
     return (
       <textarea
         className={cn(
-          "flex min-h-[80px] w-full rounded-lg bg-[#1a1a1a] border border-white/20 px-3 py-2 text-sm text-white placeholder:text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50 transition-all duration-200",
+          "flex min-h-[80px] w-full rounded-lg bg-[#1a1a1a] border border-white/20 px-3 py-2 text-sm text-white placeholder:text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 focus-visible:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50 transition-all duration-200",
           className
         )}
         ref={ref}

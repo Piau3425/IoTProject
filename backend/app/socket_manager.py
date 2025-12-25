@@ -1,782 +1,598 @@
-import asyncio
-import random
+﻿"""
+Socket 管理模組
+=====================
+負責處理 Socket.IO 連線、事件分發與各個子系統間的協調。
+此模組已進行重構，將具體邏輯委託給專門的模組處理：
+- state_manager.py: 系統狀態管理
+- violation_checker.py: 違規偵測與懲罰觸發
+- mock_hardware.py: 虛擬硬體模擬邏輯
+"""
+
 from datetime import datetime
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Dict, Any
 import socketio
 
-from .config import settings
 from .logger import safe_print
 from .models import (
-    SensorData, SystemState, PhoneStatus, PresenceStatus, BoxStatus, 
-    NoiseStatus, SessionStatus, PenaltySettings, PenaltyConfig, FocusSession,
-    HardwareState
+    SystemState, BoxStatus, SessionStatus, PenaltySettings, PenaltyConfig,
+    HardwareState, NoiseStatus
 )
-
-
-class MockHardwareState:
-    """Persistent state for mock hardware simulation."""
-    def __init__(self):
-        self.phone_inserted: bool = True
-        self.person_present: bool = True
-        self.nfc_valid: bool = True
-        self.box_locked: bool = True
-        self.box_open: bool = False  # KY-033 IR sensor - box open state
-        self.manual_mode: bool = False
-    
-    def to_dict(self) -> dict:
-        return {
-            'phone_inserted': self.phone_inserted,
-            'person_present': self.person_present,
-            'nfc_valid': self.nfc_valid,
-            'box_locked': self.box_locked,
-            'box_open': self.box_open,
-            'manual_mode': self.manual_mode
-        }
+from .state_manager import StateManager
+from .violation_checker import ViolationChecker
+from .mock_hardware import MockHardwareState, MockHardwareController
+from .progressive_penalty import ProgressivePenaltyManager, PenaltyLevel
+from .session_store import session_store, SessionRecord
+from .daily_violation_store import daily_violation_store
 
 
 class SocketManager:
-    def __init__(self):
+    """核心 Socket.IO 管理器，負責協調所有子系統。
+
+    主要功能包括：
+    - 初始化 Socket.IO 伺服器並註冊事件處理程序
+    - 管理前端客戶端與硬體端的連線
+    - 將業務邏輯分發至對應的專業模組
+    """
+
+    def __init__(self) -> None:
+        # 初始化 Socket.IO 異步伺服器
         self.sio = socketio.AsyncServer(
             async_mode='asgi',
             cors_allowed_origins='*',
-            logger=False,  # Disable verbose logging
-            engineio_logger=False  # Disable engine.io logging
+            logger=False,
+            engineio_logger=False
         )
         self.app = socketio.ASGIApp(self.sio)
-        
-        print("[Socket.IO] Server initialized")
-        
-        self.state = SystemState()
+
+        print("[Socket.IO] 伺服器已初始化")
+
+        # 追蹤當前連線的前端客戶端 SID
         self.connected_clients: List[str] = []
-        self.hardware_connected: bool = False
-        self.physical_hardware_ws_connected: bool = False  # Track if physical hardware WebSocket is connected
-        self.mock_mode_active: bool = False
-        self.mock_task: Optional[asyncio.Task] = None
-        self.mock_state: MockHardwareState = MockHardwareState()
-        self.penalty_callbacks: List[Callable] = []
-        self.current_hostage_path: Optional[str] = None
-        self.last_penalty_time: Optional[datetime] = None
-        self.penalty_cooldown_seconds: int = 30
-        self.last_broadcast_time: Optional[datetime] = None
-        self.broadcast_throttle_ms: int = 200
-        
-        # Physical hardware sensor detection status
-        self.physical_nfc_detected: bool = False
-        self.physical_ldr_detected: bool = False
-        self.physical_radar_detected: bool = True  # v1.0: radar always present
-        
-        # v1.0: Hardware state tracking
-        self.hardware_firmware_version: str = "unknown"
-        self.hardware_features: str = ""
-        
-        # Logging throttle
-        self.last_log_time: dict[str, datetime] = {}
+
+        # 用於限制日誌輸出的頻率，避免過多重複資訊
+        self.last_log_time: Dict[str, datetime] = {}
         self.log_throttle_seconds: float = 5.0
-        
+
+        # 初始化各個功能子系統
+        self._state_manager = StateManager(
+            log_callback=self._throttled_log
+        )
+
+        self._violation_checker = ViolationChecker(
+            log_callback=self._throttled_log,
+            broadcast_event_callback=self.broadcast_event
+        )
+
+        self._mock_state = MockHardwareState()
+        self._mock_controller = MockHardwareController(
+            state=self._mock_state,
+            log_callback=self._throttled_log,
+            broadcast_event_callback=self.broadcast_event,
+            process_sensor_callback=self._process_sensor_internal,
+            reset_state_callback=self._reset_system_state,
+            build_status_callback=self._build_hardware_status
+        )
+
+        # 導入遞進式懲罰系統 (Phase 3 實作)
+        self._progressive_penalty = ProgressivePenaltyManager()
+        self._progressive_penalty.set_broadcast_callback(self._broadcast_penalty_state)
+        self._setup_progressive_penalty_callbacks()
+
+        # 追蹤當前違規狀態是否已經被記錄，防止重複計數
+        self._current_violation_recorded = False
+
+        # 註冊所有的 Socket 事件處理器
         self._setup_handlers()
-    
-    def _setup_handlers(self):
+
+    # =========================================================================
+    # 屬性定義 (主要為了維持向後相容性與外部存取便利)
+    # =========================================================================
+
+    @property
+    def state(self) -> SystemState:
+        # 獲取當前全域系統狀態
+        return self._state_manager.state
+
+    @property
+    def hardware_connected(self) -> bool:
+        # 檢查硬體是否已連線
+        return self._state_manager.hardware_connected
+
+    @hardware_connected.setter
+    def hardware_connected(self, value: bool) -> None:
+        # 手動更新硬體連線狀態
+        self._state_manager.hardware_connected = value
+
+    @property
+    def mock_mode_active(self) -> bool:
+        # 檢查當前是否運行於模擬模式
+        return self._mock_controller.active
+
+    @property
+    def mock_state(self) -> MockHardwareState:
+        # 獲取模擬硬體的內部狀態
+        return self._mock_state
+
+    @property
+    def current_hostage_path(self) -> Optional[str]:
+        # 獲取目前「人質」照片的檔案路徑
+        return self._violation_checker.current_hostage_path
+
+    @current_hostage_path.setter
+    def current_hostage_path(self, value: Optional[str]) -> None:
+        # 設定「人質」照片的檔案路徑
+        self._violation_checker.set_hostage_path(value)
+
+    @property
+    def physical_hardware_ws_connected(self) -> bool:
+        # 檢查實體硬體的 WebSocket 是否維持連線
+        return self._state_manager.physical_hardware_ws_connected
+
+    @physical_hardware_ws_connected.setter
+    def physical_hardware_ws_connected(self, value: bool) -> None:
+        # 更新實體硬體 WebSocket 連線狀態
+        self._state_manager.physical_hardware_ws_connected = value
+
+    @property
+    def progressive_penalty_state(self) -> dict:
+        # 獲取遞進式懲罰系統的詳細數據
+        return self._progressive_penalty.get_state_dict()
+
+    @property
+    def hardware_features(self) -> str:
+        # 獲取硬體支援的功能列表字串
+        return self._state_manager.hardware_features
+
+    @property
+    def hardware_firmware_version(self) -> str:
+        # 獲取硬體韌體版本
+        return self._state_manager.hardware_firmware_version
+
+    # =========================================================================
+    # 遞進式懲罰系統設定
+    # =========================================================================
+
+    def _setup_progressive_penalty_callbacks(self) -> None:
+        # 初始化懲罰觸發行為
+
+        async def handle_penalty(level, count, reason):
+            # 廣播懲罰事件給前端，讓前端播放動畫
+            # 注意：實際的懲罰訊息發送由前端動畫完成後透過 /api/penalty/execute 觸發
+            # 移除此處對 penalty_callbacks 的直接呼叫，避免雙重發送
+            safe_print(f"[懲罰] 🚨 違規懲罰 - {reason}")
+            safe_print("[懲罰協定] 通知前端播放動畫，等待 API 呼叫執行實際發送...")
+
+            await self.broadcast_event('penalty_level', {
+                'level': 'PENALTY',
+                'count': count,
+                'today_count': daily_violation_store.get_count(),
+                'reason': reason,
+                'action': 'social_post'
+            })
+
+        # 註冊懲罰回調
+        self._progressive_penalty.on_penalty(handle_penalty)
+        
+        # 設定懲罰後自動停止會話的回調
+        self._progressive_penalty.set_stop_session_callback(self.stop_focus_session)
+
+    async def _broadcast_penalty_state(self, data: dict) -> None:
+        # 將懲罰狀態的異動即時通知前端
+        await self.broadcast_event('penalty_state', data)
+
+    # =========================================================================
+    # 事件處理器註冊
+    # =========================================================================
+
+    def _setup_handlers(self) -> None:
+        # 定義 Socket.IO 各項事件的監聽邏輯
+
         @self.sio.event
         async def connect(sid, environ):
+            # 前端客戶端連線成功後，立即推送當前系統與硬體狀態
             self.connected_clients.append(sid)
-            self._throttled_log('client_connect', f"[WS] Client connected: {sid}", force=True)
+            self._throttled_log('client_connect', f"[WS] 客戶端已連線: {sid}", force=True)
             await self.sio.emit('system_state', self._serialize_state(), room=sid)
-            nfc_detected, ldr_detected, radar_detected = self.get_sensor_detection_status()
-            
-            await self.sio.emit('hardware_status', {
-                'connected': self.hardware_connected,
-                'mock_mode': self.mock_mode_active,
-                'mock_state': self.mock_state.to_dict(),
-                'nfc_detected': nfc_detected,
-                'ldr_detected': ldr_detected,
-                'hall_detected': ldr_detected,  # v1.0: KY-033 IR sensor maps to ldr_detected field for backward compatibility
-                'radar_detected': radar_detected,
-                'lcd_detected': False,  # Will be updated when hardware connects
-                'hardware_state': self.state.hardware_state.value,
-                'firmware_version': self.hardware_firmware_version
-            }, room=sid)
-        
+            await self.sio.emit('hardware_status', self._build_hardware_status(), room=sid)
+
         @self.sio.event
         async def disconnect(sid):
+            # 客戶端斷開連線，清理追蹤清單
             if sid in self.connected_clients:
                 self.connected_clients.remove(sid)
-            self._throttled_log('client_disconnect', f"[WS] Client disconnected: {sid}", force=True)
-        
+            self._throttled_log('client_disconnect', f"[WS] 客戶端已斷開: {sid}", force=True)
+
         @self.sio.event
         async def hardware_connect(sid, data):
-            """Handle physical hardware connection (v1.0 format)."""
+            # 處理實體硬體 (D1-mini) 發出的連線正式註冊事件
+            if self.mock_mode_active:
+                self._throttled_log('hw_ignored', "[硬體] 當前為模擬模式，忽略實體硬體連線請求", force=False)
+                return
+
             hardware_id = data.get('hardware_id', 'UNKNOWN')
             version = data.get('version', 'N/A')
             board = data.get('board', 'D1-mini')
-            features = data.get('features', '')  # v1.0: "hall,lcd,radar"
-            
-            # v1.0: KY-033 IR sensor (反射式紅外線感測器) replaces LDR for box open/close detection
+            features = data.get('features', '')
+
+            # 根據硬體傳來的特徵字串判斷感測器配置
             hall_detected = 'hall' in features or data.get('hall_detected', True)
             radar_detected = 'radar' in features or data.get('radar_detected', True)
             lcd_detected = 'lcd' in features
-            
-            # Legacy compatibility
             nfc_detected = data.get('nfc_detected', False)
-            ldr_detected = data.get('ldr_detected', hall_detected)  # Map IR sensor to ldr field for frontend
-            
-            if self.mock_mode_active:
-                self._throttled_log('hw_ignored', f"[HARDWARE] Ignoring physical hardware (Mock mode is active)", force=False)
-                return
-            
-            self._throttled_log('hw_connect', f"[HARDWARE] v1.0 Connected - ID: {hardware_id}, Version: {version}, Board: {board}", force=True)
-            self._throttled_log('hw_features', f"[HARDWARE] Features: {features}", force=True)
-            
-            self.hardware_connected = True
-            self.physical_hardware_ws_connected = True  # Mark physical hardware as connected
-            self.hardware_firmware_version = version
-            self.hardware_features = features
-            self.physical_nfc_detected = nfc_detected
-            self.physical_ldr_detected = hall_detected  # KY-033 IR sensor maps to ldr_detected field
-            self.physical_radar_detected = radar_detected
-            
-            await self.broadcast_event('hardware_status', {
-                'connected': True, 
-                'mock_mode': False,
-                'hardware_id': hardware_id,
-                'version': version,
-                'board': board,
-                'features': features,
-                'nfc_detected': nfc_detected,
-                'ldr_detected': hall_detected,
-                'hall_detected': hall_detected,  # v1.0: KY-033 IR sensor field
-                'ir_detected': hall_detected,    # Also provide ir_detected for frontend compatibility
-                'radar_detected': radar_detected,
-                'lcd_detected': lcd_detected,
-                'mock_state': self.mock_state.to_dict()
-            })
-        
+
+            self._throttled_log('hw_connect', f"[硬體] 已上線 - ID: {hardware_id}, 版本: {version}, 開發板: {board}", force=True)
+
+            self._state_manager.update_hardware_info(
+                hardware_id=hardware_id,
+                version=version,
+                features=features,
+                nfc_detected=nfc_detected,
+                ldr_detected=hall_detected,
+                radar_detected=radar_detected
+            )
+
+            await self.broadcast_event('hardware_status', self._build_hardware_status(
+                hardware_id=hardware_id,
+                version=version,
+                board=board,
+                features=features,
+                lcd_detected=lcd_detected
+            ))
+
         @self.sio.event
         async def heartbeat(sid, data):
-            """Handle heartbeat from physical hardware (v1.0 format)."""
-            hardware_id = data.get('hardware_id', 'UNKNOWN')
-            state = data.get('state', 'IDLE')  # v1.0: hardware state machine
-            uptime = data.get('uptime', 0)
-            wifi_rssi = data.get('wifi_rssi', 0)
-            free_heap = data.get('free_heap', 0)
-        
+            # 靜默處理硬體心跳包，不進行日誌記錄
+            pass
+
         @self.sio.event
         async def state_change(sid, data):
-            """Handle hardware state machine changes (v1.0 new event)."""
-            hardware_id = data.get('hardware_id', 'UNKNOWN')
+            # 處理硬體內建狀態機的切換事件
             previous_state = data.get('previous_state', 'IDLE')
             current_state = data.get('current_state', 'IDLE')
             total_focus_time_ms = data.get('total_focus_time_ms', 0)
-            
-            self._throttled_log('state_change', f"[HARDWARE STATE] {previous_state} → {current_state}", force=True)
-            
-            # Update system state
+
+            self._throttled_log('state_change', f"[硬體狀態切換] {previous_state} → {current_state}", force=True)
+
             try:
-                self.state.hardware_state = HardwareState(current_state)
+                self._state_manager.state.hardware_state = HardwareState(current_state)
             except ValueError:
-                self.state.hardware_state = HardwareState.IDLE
-            
-            # Handle state transitions
+                self._state_manager.state.hardware_state = HardwareState.IDLE
+
+            # 如果硬體判定進入違規(VIOLATION)狀態，觸發後端違規檢核
             if current_state == 'VIOLATION':
-                # Hardware detected violation (box opened during focus)
                 if self.state.session and self.state.session.status == SessionStatus.ACTIVE:
-                    self._throttled_log('hw_violation', "[HARDWARE] Violation detected by hardware!", force=True)
-                    self.state.box_status = BoxStatus.OPEN
-                    await self._check_violations()
-            
+                    self._throttled_log('hw_violation', "[硬體] 硬體端主動回報違規！", force=True)
+                    self._state_manager.state.box_status = BoxStatus.OPEN
+                    # 使用進階懲罰系統記錄違規（會調用 daily_violation_store.increment()）
+                    await self._progressive_penalty.record_violation("硬體偵測違規")
             elif current_state == 'FOCUSING':
-                # Hardware entered focus mode
-                self.state.box_status = BoxStatus.CLOSED
-            
-            elif current_state == 'IDLE':
-                # Hardware returned to idle
-                pass
-            
+                # 恢復專注狀態，通知遞進懲罰系統違規已解除
+                self._state_manager.state.box_status = BoxStatus.CLOSED
+                await self._progressive_penalty.violation_resolved()
+
+                if self.state.session and self.state.session.status == SessionStatus.VIOLATED:
+                    self.state.session.status = SessionStatus.ACTIVE
+                    print("[專注協定] 違規已修正，恢復專注狀態")
+
             await self.broadcast_state(force=True)
             await self.broadcast_event('hardware_state_change', {
                 'previous_state': previous_state,
                 'current_state': current_state,
                 'total_focus_time_ms': total_focus_time_ms
             })
-        
+
         @self.sio.event
         async def sensor_data(sid, data):
+            # 接收並處理硬體原始感測器數據
             if self.mock_mode_active:
                 return
-            
-            # v1.0: Extract new fields
-            nfc_detected = data.get('nfc_detected', False)
-            ldr_detected = data.get('ldr_detected', False)  # Actually KY-033 IR sensor in v1.0
+
+            ldr_detected = data.get('ldr_detected', False)
             if ldr_detected is not None:
                 data['ldr_detected'] = ldr_detected
-            
-            # Don't log routine sensor data - happens 10 times per second
-            # Only important state changes are logged in process_sensor_data
-                
+
             await self.process_sensor_data(data)
-        
+
         @self.sio.event
         async def start_session(sid, data):
+            # 前端請求開始新的專注任務
             duration = data.get('duration_minutes', 25)
             await self.start_focus_session(duration)
-        
+
         @self.sio.event
         async def stop_session(sid, data):
+            # 前端請求終止專注任務
             await self.stop_focus_session()
-        
+
         @self.sio.event
         async def update_penalty_settings(sid, data):
+            # 更新全域懲罰開關設定
             try:
-                self.state.penalty_settings = PenaltySettings(**data)
+                self._state_manager.state.penalty_settings = PenaltySettings(**data)
+                self._state_manager.save_settings()
                 await self.broadcast_state(force=True)
             except Exception as e:
-                print(f"[ERROR] Failed to update penalty settings: {e}")
-        
+                print(f"[錯誤] 更新懲罰開關失敗: {e}")
+
         @self.sio.event
         async def update_penalty_config(sid, data):
-            """Update granular penalty configuration."""
+            # 更新細粒度的懲罰類型設定
             try:
-                self.state.penalty_config = PenaltyConfig(**data)
-                # Also update active session's penalty config if session exists
+                self._state_manager.state.penalty_config = PenaltyConfig(**data)
                 if self.state.session:
                     self.state.session.penalty_config = self.state.penalty_config
-                print(f"[PENALTY CONFIG] Updated: {self.state.penalty_config.model_dump()}")
+                self._state_manager.save_settings()
+                print(f"[懲罰配置] 已更新: {self.state.penalty_config.model_dump()}")
                 await self.broadcast_state(force=True)
             except Exception as e:
-                print(f"[ERROR] Failed to update penalty config: {e}")
-        
+                print(f"[錯誤] 更新懲罰細節配置失敗: {e}")
+
         @self.sio.event
         async def toggle_mock_hardware(sid, data):
+            # 開啟或關閉硬體模擬模式
             enabled = data.get('enabled', False)
-            print(f"[MOCK] Toggle request: enabled={enabled}, current_state={self.mock_mode_active}")
+            print(f"[模擬器] 切換請求: 客戶端要求啟用={enabled}, 當前狀態={self.mock_mode_active}")
             if enabled:
                 await self.start_mock_hardware()
             else:
                 await self.stop_mock_hardware()
-    
-    async def process_sensor_data(self, data: dict):
-        try:
-            # Normalize nfc_id: convert empty string to None
-            if 'nfc_id' in data and data['nfc_id'] == '':
-                data['nfc_id'] = None
-            
-            # Handle box_open field (v1.0: KY-033 IR sensor, v2.0: LDR)
-            if 'box_open' not in data:
-                # Legacy compatibility: infer from box_locked
-                data['box_open'] = not data.get('box_locked', True)
-            
-            sensor = SensorData(**data)
-            self.state.last_sensor_data = sensor
-            self.state.current_db = sensor.mic_db
-            
-            # v1.0: Update hardware state from sensor data
-            if sensor.state:
-                try:
-                    self.state.hardware_state = HardwareState(sensor.state)
-                except ValueError:
-                    pass
-            
-            # Update phone status based on NFC
-            # In mock mode: nfc_id alone determines phone status, box_open is independent
-            # In physical mode: box_open can affect phone detection
-            if self.mock_mode_active:
-                # Mock mode: box_open doesn't affect phone status
-                if sensor.nfc_id:
-                    if self.state.phone_status != PhoneStatus.LOCKED:
-                        self._throttled_log('phone_locked', "[STATUS] ✓ Phone locked in box", force=True)
-                    self.state.phone_status = PhoneStatus.LOCKED
-                else:
-                    if self.state.phone_status == PhoneStatus.LOCKED:
-                        self.state.phone_status = PhoneStatus.REMOVED
-                        self._throttled_log('phone_removed', "[ALERT] ⚠️  Phone removed from box!", force=True)
-                    else:
-                        self.state.phone_status = PhoneStatus.REMOVED
-            else:
-                # Physical mode: box_open can affect phone detection (legacy logic)
-                if sensor.nfc_id and not sensor.box_open:
-                    if self.state.phone_status != PhoneStatus.LOCKED:
-                        self._throttled_log('phone_locked', "[STATUS] ✓ Phone locked in box", force=True)
-                    self.state.phone_status = PhoneStatus.LOCKED
-                elif not sensor.nfc_id or sensor.box_open:
-                    if self.state.phone_status == PhoneStatus.LOCKED:
-                        self.state.phone_status = PhoneStatus.REMOVED
-                        self._throttled_log('phone_removed', "[ALERT] ⚠️  Phone removed from box!", force=True)
-                    else:
-                        self.state.phone_status = PhoneStatus.REMOVED
-            
-            # Update presence status based on radar
-            if sensor.radar_presence:
-                if self.state.presence_status != PresenceStatus.DETECTED:
-                    self._throttled_log('person_detected', "[STATUS] ✓ Person detected", force=True)
-                self.state.presence_status = PresenceStatus.DETECTED
-                self.state.person_away_since = None
-            else:
-                if self.state.presence_status == PresenceStatus.DETECTED:
-                    self.state.person_away_since = datetime.now()
-                    self._throttled_log('person_away', "[STATUS] ⚠️  Person away - monitoring...", force=True)
-                self.state.presence_status = PresenceStatus.AWAY
-            
-            # Update box status based on LDR (new in v2.0)
-            if sensor.box_open:
-                if self.state.box_status != BoxStatus.OPEN:
-                    self._throttled_log('box_open', "[ALERT] ⚠️  Box opened!", force=True)
-                self.state.box_status = BoxStatus.OPEN
-            else:
-                if self.state.box_status != BoxStatus.CLOSED:
-                    self._throttled_log('box_closed', "[STATUS] ✓ Box closed", force=True)
-                self.state.box_status = BoxStatus.CLOSED
-            
-            # Update noise status based on mic
-            noise_threshold = self.state.penalty_config.noise_threshold_db
-            if sensor.mic_db >= noise_threshold:
-                if self.state.noise_status != NoiseStatus.NOISY:
-                    self._throttled_log('noise_detected', f"[ALERT] ⚠️  Noise detected ({sensor.mic_db} dB)", force=True)
-                self.state.noise_status = NoiseStatus.NOISY
-            else:
-                self.state.noise_status = NoiseStatus.QUIET
-            
-            # Check for violations during active session
-            await self._check_violations()
-            
-            # Broadcast updated state to all clients
-            await self.broadcast_state()
-            
-        except Exception as e:
-            import traceback
-            print(f"[ERROR] Processing sensor data: {e}")
-            print(f"[ERROR] Traceback: {traceback.format_exc()}")
-            print(f"[ERROR] Data received: {data}")
-    
-    async def _check_violations(self):
+
+    # =========================================================================
+    # 感測器數據處理
+    # =========================================================================
+
+    async def _process_sensor_internal(self, data: Dict[str, Any]) -> None:
+        # 用於驅動模擬器數據注入的內部回呼
+        await self.process_sensor_data(data)
+
+    async def process_sensor_data(self, data: Dict[str, Any]) -> None:
+        # 處理任何來源（實體或模擬）的感測器數據並更新全域狀態
+        sensor = self._state_manager.process_sensor_data(data, self.mock_mode_active)
+        if sensor is None:
+            return
+
+        # 每次數據更新後檢查是否觸發違規
+        # 使用進階懲罰系統來檢測違規，而不是舊的 violation_checker
         if self.state.session and self.state.session.status == SessionStatus.ACTIVE:
+            # 檢查各項違規條件
+            config = self.state.session.penalty_config
             violation_detected = False
             violation_reason = ""
             
-            # Get penalty config from session (which inherits from global if not overridden)
-            config = self.state.session.penalty_config
-            
-            # Check if phone was removed (only if penalty enabled)
-            if config.enable_phone_penalty and self.state.phone_status == PhoneStatus.REMOVED:
+            # 1. 檢查手機是否被移除
+            if config.enable_phone_penalty and self.state.phone_status.value == 'REMOVED':
                 violation_detected = True
-                violation_reason = "Phone removed"
-                self._throttled_log('violation_phone', "[VIOLATION] ⚠️  Phone removed during focus session!")
-            
-            # Check if person has been away too long (only if penalty enabled)
-            if config.enable_presence_penalty and self.state.person_away_since:
+                violation_reason = "手機被移出"
+            # 2. 檢查人員是否離開位置
+            elif config.enable_presence_penalty and self.state.person_away_since:
+                from datetime import datetime
                 away_duration = (datetime.now() - self.state.person_away_since).total_seconds()
-                if away_duration > settings.PERSON_AWAY_THRESHOLD_SEC:
+                if away_duration > config.presence_duration_sec:
                     violation_detected = True
-                    violation_reason = f"Person away for {away_duration:.1f}s"
-                    self._throttled_log('violation_away', f"[VIOLATION] ⚠️  Person away for {away_duration:.1f}s!")
-            
-            # Check if box is open (only if penalty enabled) - NEW in v2.0
-            if config.enable_box_open_penalty and self.state.box_status == BoxStatus.OPEN:
+                    violation_reason = f"人員離位 {away_duration:.1f} 秒"
+            # 3. 檢查盒子是否被打開
+            elif config.enable_box_open_penalty and self.state.box_status.value == 'OPEN':
                 violation_detected = True
-                violation_reason = "Box opened"
-                self._throttled_log('violation_box_open', "[VIOLATION] ⚠️  Box opened during focus session!")
-            
-            # Check if environment is too noisy (only if penalty enabled)
-            if config.enable_noise_penalty and self.state.noise_status == NoiseStatus.NOISY:
-                violation_detected = True
-                violation_reason = f"Noise detected ({self.state.current_db} dB)"
-                self._throttled_log('violation_noise', f"[VIOLATION] ⚠️  Noise violation ({self.state.current_db} dB)!")
+                violation_reason = "盒子被打開"
+            # 4. 檢查噴音持續違規
+            elif config.enable_noise_penalty and self.state.noise_status.value == 'NOISY':
+                if self.state.noise_start_time:
+                    from datetime import datetime
+                    noise_duration = (datetime.now() - self.state.noise_start_time).total_seconds()
+                    if noise_duration > config.noise_duration_sec:
+                        violation_detected = True
+                        violation_reason = f"噴音違規 ({self.state.current_db} dB)"
+                        self._state_manager.state.noise_start_time = None
             
             if violation_detected:
-                # Check penalty cooldown to prevent spam
-                now = datetime.now()
-                if self.last_penalty_time is None or \
-                   (now - self.last_penalty_time).total_seconds() >= self.penalty_cooldown_seconds:
-                    self.state.session.violations += 1
-                    self.state.session.status = SessionStatus.VIOLATED
-                    self.last_penalty_time = now
-                    print(f"[VIOLATION] Triggering penalty: {violation_reason}")
-                    await self._trigger_penalty()
-                else:
-                    cooldown_remaining = self.penalty_cooldown_seconds - (now - self.last_penalty_time).total_seconds()
-                    print(f"[VIOLATION] Penalty on cooldown ({cooldown_remaining:.1f}s remaining)")
-    
-    async def _trigger_penalty(self):
-        print("[懲罰協定] 啟動社交羞恥執行程序...")
-        await self.broadcast_event('penalty_triggered', {
-            'timestamp': datetime.now().isoformat(),
-            'violations': self.state.session.violations if self.state.session else 0,
-            'has_hostage': self.current_hostage_path is not None
-        })
+                # 只有新的違規才會觸發記錄，避免同一違規事件被重複計數
+                if not self._current_violation_recorded:
+                    self._current_violation_recorded = True
+                    await self._progressive_penalty.record_violation(violation_reason)
+            else:
+                # 違規狀態已解除，重置標記
+                if self._current_violation_recorded:
+                    self._current_violation_recorded = False
+                    await self._progressive_penalty.violation_resolved()
         
-        # Execute registered penalty callbacks with hostage path
-        for callback in self.penalty_callbacks:
-            try:
-                await callback(self.state, self.current_hostage_path)
-            except Exception as e:
-                print(f"[錯誤] 懲罰回調執行失敗: {e}")
-        
-        if self.state.session:
-            self.state.session.penalties_executed += 1
-    
-    def register_penalty_callback(self, callback: Callable):
-        self.penalty_callbacks.append(callback)
-    
-    async def start_focus_session(self, duration_minutes: int, hostage_path: Optional[str] = None):
-        import uuid
-        
-        self.current_hostage_path = hostage_path
-        self.last_penalty_time = None
-        self.state.session = FocusSession(
-            id=str(uuid.uuid4()),
-            duration_minutes=duration_minutes,
-            start_time=datetime.now(),
-            status=SessionStatus.ACTIVE,
-            penalty_config=self.state.penalty_config
-        )
+        await self.broadcast_state()
+
+    # =========================================================================
+    # 專注任務管理
+    # =========================================================================
+
+    async def start_focus_session(self, duration_minutes: int, hostage_path: Optional[str] = None) -> None:
+        # 重置噪音計時器，確保新協定不受前一次協定殘留狀態影響
+        self._state_manager.state.noise_start_time = None
+
+        # 啟動專注流程：重置計時器、初始化懲罰鏈結、更新狀態
+        self._violation_checker.set_hostage_path(hostage_path)
+
+        self._violation_checker.reset_penalty_timer()
+
+        # 開始新的遞進式懲罰追蹤
+        self._progressive_penalty.start_session()
+
+        self._state_manager.start_session(duration_minutes)
+
+        # 修復：檢查協定啟動時的環境音量狀態
+        # 如果目前環境音量已超過閾值，立即開始噪音計時
+        if self._state_manager.state.noise_status == NoiseStatus.NOISY:
+            self._state_manager.state.noise_start_time = datetime.now()
+            print("[專注協定] 偵測到環境音量已超標，開始計時...")
+
         print(f"[專注協定] 已啟動 {duration_minutes} 分鐘專注任務")
         print(f"[專注協定] 懲罰配置: {self.state.penalty_config.model_dump()}")
+        print(f"[專注協定] 遞進懲罰已啟用 (5秒寬限期)")
+        print(f"[專注協定] 今日違規次數: {daily_violation_store.get_count()}")
         if hostage_path:
             print(f"[人質協定] 人質照片已綁定: {hostage_path}")
+
         await self.broadcast_state(force=True)
-        
-        # v1.0: Send START command to hardware state machine
         await self.sio.emit('command', {'command': 'START'})
-    
-    async def stop_focus_session(self):
-        if self.state.session:
-            self.state.session.status = SessionStatus.COMPLETED
-            self.state.session.end_time = datetime.now()
+
+    async def stop_focus_session(self) -> None:
+        # 停止當前任務，並將紀錄持久化存檔
+        session = self.state.session
+
+        if session:
             print("[專注協定] 專注任務已結束")
-            self.state.session = None
-        
-        self.current_hostage_path = None
-        
-        # v1.0: Send STOP command to hardware state machine
+
+            try:
+                record = SessionRecord(
+                    id=session.id,
+                    start_time=session.start_time.isoformat() if session.start_time else datetime.now().isoformat(),
+                    end_time=datetime.now().isoformat(),
+                    duration_minutes=session.duration_minutes,
+                    status=session.status.value if session.status else "COMPLETED",
+                    violation_count=self._progressive_penalty.get_state_dict().get('count', 0),
+                    penalty_level=str(self._progressive_penalty.get_state_dict().get('level', 'NONE')),
+                    total_focus_time_seconds=int(session.elapsed_seconds or 0)
+                )
+                session_store.add_session(record)
+                print(f"[歷史紀錄] 任務 {session.id} 已存入資料庫")
+            except Exception as e:
+                print(f"[歷史紀錄] 存檔失敗: {e}")
+
+        # 停止專注時同步停止懲罰追蹤
+        self._progressive_penalty.stop_session()
+
+        self._state_manager.stop_session()
+        self._violation_checker.set_hostage_path(None)
+
         await self.sio.emit('command', {'command': 'STOP'})
-        
         await self.broadcast_state(force=True)
-    
-    async def pause_focus_session(self):
-        """Pause the current focus session (v1.0 new feature)."""
-        if self.state.session and self.state.session.status == SessionStatus.ACTIVE:
-            # Record the pause time
-            self.state.session.paused_at = datetime.now()
-            self.state.session.status = SessionStatus.PAUSED
+
+    async def pause_focus_session(self) -> None:
+        # 暫停專注任務（v1.0 新功能）
+        if self._state_manager.pause_session():
             await self.sio.emit('command', {'command': 'PAUSE'})
-            print(f"[專注協定] 專注任務已暫停 - 暫停時間: {self.state.session.paused_at.isoformat()}")
+            print(f"[專注協定] 專注任務已暫停 - 時間點: {self.state.session.paused_at.isoformat()}")
             await self.broadcast_state(force=True)
-    
-    async def resume_focus_session(self):
-        """Resume a paused focus session (v1.0 new feature)."""
-        if self.state.session and self.state.session.status == SessionStatus.PAUSED:
-            if self.state.session.paused_at:
-                # Calculate paused duration and add to total
-                paused_duration = (datetime.now() - self.state.session.paused_at).total_seconds()
-                self.state.session.total_paused_seconds += int(paused_duration)
-                print(f"[專注協定] 本次暫停時長: {int(paused_duration)}秒, 累計暫停: {self.state.session.total_paused_seconds}秒")
-                self.state.session.paused_at = None
-            
-            self.state.session.status = SessionStatus.ACTIVE
+
+    async def resume_focus_session(self) -> None:
+        # 恢復已被暫停的任務
+        if self._state_manager.resume_session():
             await self.sio.emit('command', {'command': 'RESUME'})
             print("[專注協定] 專注任務已恢復")
             await self.broadcast_state(force=True)
-    
-    async def acknowledge_violation(self):
-        """Acknowledge a violation and return to idle (v1.0 new feature)."""
+
+    async def acknowledge_violation(self) -> None:
+        # 前端手動確認違規狀態並返回首頁
         if self.state.session and self.state.session.status == SessionStatus.VIOLATED:
             await self.sio.emit('command', {'command': 'ACKNOWLEDGE'})
-            print("[專注協定] 違規已確認，返回待機狀態")
-    
-    def _serialize_state(self) -> dict:
-        """Serialize system state for transmission."""
-        state_dict = self.state.model_dump()
-        # Convert datetime objects to ISO format
-        if self.state.session:
-            if self.state.session.start_time:
-                state_dict['session']['start_time'] = self.state.session.start_time.isoformat()
-            if self.state.session.end_time:
-                state_dict['session']['end_time'] = self.state.session.end_time.isoformat()
-            if self.state.session.paused_at:
-                state_dict['session']['paused_at'] = self.state.session.paused_at.isoformat()
-        if self.state.person_away_since:
-            state_dict['person_away_since'] = self.state.person_away_since.isoformat()
-        # Convert enums to values
-        state_dict['hardware_state'] = self.state.hardware_state.value
-        return state_dict
-    
-    async def broadcast_state(self, force: bool = False):
-        now = datetime.now()
-        if not force and self.last_broadcast_time:
-            elapsed_ms = (now - self.last_broadcast_time).total_seconds() * 1000
-            if elapsed_ms < self.broadcast_throttle_ms:
-                return
-        
-        self.last_broadcast_time = now
+            print("[專注協定] 違規已確認，系統返回待機")
+
+    # =========================================================================
+    # 硬體模擬控制
+    # =========================================================================
+
+    async def start_mock_hardware(self) -> None:
+        # 啟動虛擬硬體，並根據需要接管實體硬體的權限
+        if self._state_manager.hardware_connected and not self.mock_mode_active:
+            print("[模擬器] 偵測到實體硬體連線中 - 強制切換為模擬模式")
+            print("[模擬器] 之後將完全忽略來自實體開發板的數據流")
+
+        def set_connected(value: bool):
+            self._state_manager.hardware_connected = value
+
+        await self._mock_controller.start(set_connected)
+
+    async def stop_mock_hardware(self) -> None:
+        # 停止模擬硬體，若實體硬體仍有連線則切換回實體連線狀態
+        def set_connected(value: bool):
+            self._state_manager.hardware_connected = value
+
+        await self._mock_controller.stop(
+            set_connected,
+            self._state_manager.physical_hardware_ws_connected
+        )
+
+    async def set_mock_state(self, **kwargs) -> Dict[str, Any]:
+        # 更新虛擬硬體的內部感測值（由前端模擬面板操作）
+        return await self._mock_controller.set_state(
+            broadcast_state_callback=lambda: self.broadcast_state(force=True),
+            **kwargs
+        )
+
+    # =========================================================================
+    # 狀態廣播機制
+    # =========================================================================
+
+    def _serialize_state(self) -> Dict[str, Any]:
+        # 將 Pydantic 模型狀態序列化為 JSON 友善格式
+        return self._state_manager.serialize_state()
+
+    async def broadcast_state(self, force: bool = False) -> None:
+        # 將最新系統狀態分發給所有前端連線
+        if not force and not self._state_manager.should_broadcast():
+            return
+
+        self._state_manager.mark_broadcast()
         await self.sio.emit('system_state', self._serialize_state())
-    
-    async def broadcast_event(self, event: str, data: dict):
+
+    async def broadcast_event(self, event: str, data: Dict[str, Any]) -> None:
+        # 發送通用自定義事件
         await self.sio.emit(event, data)
-    
+
+    # =========================================================================
+    # 硬體狀態彙整
+    # =========================================================================
+
     def get_sensor_detection_status(self) -> tuple:
-        """Get current sensor detection status (nfc_detected, ldr_detected, radar_detected)."""
-        if self.mock_mode_active:
-            return True, True, True
-        elif self.hardware_connected:
-            return self.physical_nfc_detected, self.physical_ldr_detected, self.physical_radar_detected
-        else:
-            return False, False, False
-    
-    def _throttled_log(self, log_key: str, message: str, force: bool = False):
-        """Log a message but throttle repeated messages."""
+        # 根據模式決定目前應呈現哪些感測器被「偵測到」
+        return self._state_manager.get_sensor_detection_status(self.mock_mode_active)
+
+    def _build_hardware_status(self, **overrides) -> Dict[str, Any]:
+        # 構建傳送給前端的詳細硬體診斷資訊包
+        nfc_detected, ldr_detected, radar_detected = self.get_sensor_detection_status()
+
+        # 模擬模式時視為「已連線」且硬體狀態為可用
+        is_connected = self._state_manager.hardware_connected or self.mock_mode_active
+
+        status = {
+            'connected': is_connected,
+            'mock_mode': self.mock_mode_active,
+            'mock_state': self._mock_state.to_dict(),
+            'nfc_detected': nfc_detected,
+            'ldr_detected': ldr_detected,
+            'hall_detected': ldr_detected,
+            'ir_detected': ldr_detected,
+            'radar_detected': radar_detected,
+            'lcd_detected': 'lcd' in self._state_manager.hardware_features,
+            'hardware_state': self.state.hardware_state.value,
+            'firmware_version': self._state_manager.hardware_firmware_version
+        }
+
+        status.update(overrides)
+        return status
+
+    # =========================================================================
+    # 輔助工具方法
+    # =========================================================================
+
+    def _throttled_log(self, log_key: str, message: str, force: bool = False) -> None:
+        # 對高頻日誌進行節流處理，避免終端機刷屏
         if force:
             print(message)
             return
-        
+
         now = datetime.now()
         last_time = self.last_log_time.get(log_key)
-        
+
         if last_time is None or (now - last_time).total_seconds() >= self.log_throttle_seconds:
             print(message)
             self.last_log_time[log_key] = now
-    
-    async def _reset_system_state(self):
-        """Reset system state when switching hardware modes"""
-        self.state.last_sensor_data = None
-        self.state.current_db = 40  # Default noise level
-        self.state.phone_status = PhoneStatus.UNKNOWN
-        self.state.presence_status = PresenceStatus.UNKNOWN
-        self.state.box_status = BoxStatus.UNKNOWN
-        self.state.noise_status = NoiseStatus.UNKNOWN
-        self.state.person_away_since = None
+
+    async def _reset_system_state(self) -> None:
+        # 在硬體模式切換（模擬/實體）時執行狀態清零
+        self._state_manager.reset_state()
         await self.broadcast_state(force=True)
-        print("[SYSTEM] State reset due to hardware mode change")
 
-    async def start_mock_hardware(self):
-        """Start mock hardware simulation. Can override physical hardware if requested."""
-        # Check if mock mode is already running
-        if self.mock_mode_active:
-            print("[MOCK] Hardware simulation already running")
-            await self.broadcast_event('hardware_status', {
-                'connected': True, 
-                'mock_mode': True,
-                'mock_state': self.mock_state.to_dict(),
-                'nfc_detected': True,
-                'ldr_detected': True,
-                'hall_detected': True,
-                'ir_detected': True,
-                'radar_detected': True,
-                'lcd_detected': 'lcd' in self.hardware_features
-            })
-            return
-        
-        # If physical hardware is connected, we will override it
-        if self.hardware_connected:
-            print("[MOCK] Physical hardware detected - switching to mock mode")
-            print("[MOCK] Real hardware data will be completely ignored")
-        
-        try:
-            # Set mock mode FIRST to prevent any incoming hardware data from being processed
-            self.mock_mode_active = True
-            
-            await self._reset_system_state()  # Reset state before starting mock
-            
-            # Cancel any existing mock task
-            if self.mock_task and not self.mock_task.done():
-                self.mock_task.cancel()
-                try:
-                    await self.mock_task
-                except asyncio.CancelledError:
-                    pass
-            
-            self.mock_task = asyncio.create_task(self._mock_hardware_loop())
-            self.hardware_connected = True  # Mock hardware is now "connected"
-            print("[MOCK] Hardware simulation started")
-            
-            # Broadcast immediately with full status
-            await self.broadcast_event('hardware_status', {
-                'connected': True, 
-                'mock_mode': True,
-                'mock_state': self.mock_state.to_dict(),
-                'nfc_detected': True,  # Mock hardware always has NFC
-                'ldr_detected': True,  # Mock hardware always has LDR
-                'hall_detected': True,  # v1.0: KY-033 IR sensor field
-                'ir_detected': True,   # Also provide ir_detected for frontend compatibility
-                'radar_detected': True,  # Mock hardware always has radar
-                'lcd_detected': 'lcd' in self.hardware_features
-            })
-            
-            # Send initial sensor data immediately for instant feedback
-            initial_mock_data = {
-                'nfc_id': 'PHONE_MOCK_001' if (self.mock_state.phone_inserted and self.mock_state.nfc_valid) else None,
-                'gyro_x': 0.0,
-                'gyro_y': 0.0,
-                'gyro_z': 0.0,
-                'radar_presence': self.mock_state.person_present,
-                'mic_db': 45,
-                'box_locked': not self.mock_state.box_open,
-                'box_open': self.mock_state.box_open,
-                'timestamp': int(datetime.now().timestamp() * 1000),
-                'nfc_detected': True,
-                'gyro_detected': False,
-                'ldr_detected': True
-            }
-            await self.process_sensor_data(initial_mock_data)
-            
-        except Exception as e:
-            print(f"[MOCK ERROR] Failed to start mock hardware: {e}")
-            self.mock_mode_active = False
-            self.hardware_connected = False
-            await self.broadcast_event('error', {
-                'message': f'Failed to start mock hardware: {str(e)}',
-                'type': 'MOCK_START_FAILED'
-            })
-
-    async def stop_mock_hardware(self):
-        """Stop mock hardware simulation."""
-        if self.mock_task:
-            self.mock_task.cancel()
-            try:
-                await self.mock_task
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                print(f"[MOCK] Error during task cancellation: {e}")
-            self.mock_task = None
-        
-        try:
-            # Set mock_mode_active to False BEFORE resetting state
-            self.mock_mode_active = False
-            
-            # Reset mock state when stopping
-            self.mock_state = MockHardwareState()
-            
-            await self._reset_system_state()  # Reset state after stopping mock
-            
-            # Check if physical hardware is still connected
-            if self.physical_hardware_ws_connected:
-                # Physical hardware is connected, keep hardware_connected = True
-                self.hardware_connected = True
-                print("[MOCK] Hardware simulation stopped - Switching back to physical hardware")
-                await self.broadcast_event('hardware_status', {
-                    'connected': True,
-                    'mock_mode': False,
-                    'mock_state': self.mock_state.to_dict(),
-                    'nfc_detected': self.physical_nfc_detected,
-                    'ldr_detected': self.physical_ldr_detected,
-                    'hall_detected': self.physical_ldr_detected,
-                    'ir_detected': self.physical_ldr_detected,
-                    'radar_detected': self.physical_radar_detected,
-                    'lcd_detected': 'lcd' in self.hardware_features,
-                    'last_sensor_data': self.state.last_sensor_data.model_dump() if self.state.last_sensor_data else None
-                })
-            else:
-                # No physical hardware, set disconnected
-                self.hardware_connected = False
-                print("[MOCK] Hardware simulation stopped")
-                await self.broadcast_event('hardware_status', {
-                    'connected': False,
-                    'mock_mode': False,
-                    'mock_state': self.mock_state.to_dict(),
-                    'nfc_detected': False,
-                    'ldr_detected': False,
-                    'hall_detected': False,
-                    'ir_detected': False,
-                    'radar_detected': False,
-                    'lcd_detected': False
-                })
-        except Exception as e:
-            print(f"[MOCK ERROR] Error during stop: {e}")
-    
-    async def _mock_hardware_loop(self):
-        self._throttled_log('mock_start', "[MOCK] ▶️  Sensor simulation running...", force=True)
-        
-        loop_count = 0
-        while True:
-            try:
-                loop_count += 1
-                # Log status every 20 iterations (every ~2 seconds at 100ms interval)
-                if loop_count % 20 == 0:
-                    self._throttled_log('mock_running', f"[MOCK] 📊 Simulation active - phone: {self.mock_state.phone_inserted}, person: {self.mock_state.person_present}, box_open: {self.mock_state.box_open}")
-                
-                # Use persistent mock_state for sensor data
-                mock_data = {
-                    'nfc_id': 'PHONE_MOCK_001' if (self.mock_state.phone_inserted and self.mock_state.nfc_valid) else None,
-                    'gyro_x': 0.0,  # Legacy, kept for compatibility
-                    'gyro_y': 0.0,
-                    'gyro_z': 0.0,
-                    'radar_presence': self.mock_state.person_present,
-                    'mic_db': random.randint(35, 55),
-                    'box_locked': not self.mock_state.box_open,  # Legacy compatibility
-                    'box_open': self.mock_state.box_open,  # New: LDR sensor
-                    'timestamp': int(datetime.now().timestamp() * 1000),
-                    'nfc_detected': True,
-                    'gyro_detected': False,  # Removed in v2.0
-                    'ldr_detected': True  # New: LDR sensor
-                }
-                
-                await self.process_sensor_data(mock_data)
-                await asyncio.sleep(settings.MOCK_INTERVAL_MS / 1000)
-                
-            except asyncio.CancelledError:
-                self._throttled_log('mock_cancel', "[MOCK] ⏹️  Simulation stopped", force=True)
-                break
-            except Exception as e:
-                import traceback
-                self._throttled_log('mock_error', f"[MOCK ERROR] ❌ {e}")
-                await asyncio.sleep(1)  # Wait before retrying
-    
-    async def set_mock_state(self, **kwargs) -> dict:
-        """Update mock hardware state and broadcast changes."""
-        try:
-            # Track if any state actually changed
-            state_changed = False
-            for key, value in kwargs.items():
-                if hasattr(self.mock_state, key):
-                    old_value = getattr(self.mock_state, key)
-                    if old_value != value:
-                        setattr(self.mock_state, key, value)
-                        state_changed = True
-                else:
-                    self._throttled_log('mock_unknown_attr', f"[MOCK] Warning: Unknown attribute '{key}'")
-            
-            # Only process if state actually changed
-            if not state_changed:
-                return self.mock_state.to_dict()
-            
-            self._throttled_log('mock_state_update', f"[MOCK] 🔄 State: phone={self.mock_state.phone_inserted}, person={self.mock_state.person_present}, box_open={self.mock_state.box_open}", force=True)
-            
-            # Broadcast updated hardware status using helper method
-            nfc_detected, ldr_detected, radar_detected = self.get_sensor_detection_status()
-            await self.broadcast_event('hardware_status', {
-                'connected': self.hardware_connected,
-                'mock_mode': self.mock_mode_active,
-                'mock_state': self.mock_state.to_dict(),
-                'nfc_detected': nfc_detected,
-                'ldr_detected': ldr_detected,
-                'hall_detected': ldr_detected,  # v1.0: KY-033 IR sensor field
-                'ir_detected': ldr_detected,    # Also provide ir_detected for frontend compatibility
-                'radar_detected': radar_detected,
-                'lcd_detected': 'lcd' in self.hardware_features
-            })
-            
-            # If mock mode is active, immediately send sensor data with new state
-            if self.mock_mode_active:
-                mock_data = {
-                    'nfc_id': 'PHONE_MOCK_001' if (self.mock_state.phone_inserted and self.mock_state.nfc_valid) else None,
-                    'gyro_x': 0.0,
-                    'gyro_y': 0.0,
-                    'gyro_z': 0.0,
-                    'radar_presence': self.mock_state.person_present,
-                    'mic_db': random.randint(35, 55),
-                    'box_locked': not self.mock_state.box_open,
-                    'box_open': self.mock_state.box_open,
-                    'timestamp': int(datetime.now().timestamp() * 1000),
-                    'nfc_detected': True,
-                    'gyro_detected': False,
-                    'ldr_detected': True
-                }
-                await self.process_sensor_data(mock_data)
-                await self.broadcast_state(force=True)
-            
-            return self.mock_state.to_dict()
-        except Exception as e:
-            print(f"[MOCK ERROR] Failed to set mock state: {e}")
-            return self.mock_state.to_dict()
+    def register_penalty_callback(self, callback: Callable) -> None:
+        # 讓外部模組（如 social_manager）註冊懲罰執行的行為
+        self._violation_checker.register_callback(callback)
 
 
-# Global socket manager instance
+# 全域單例實例，確保整個後端共用同一個 Socket 管理器
 socket_manager = SocketManager()

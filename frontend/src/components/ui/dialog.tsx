@@ -1,3 +1,8 @@
+/**
+ * 對話框組件 (Dialog)
+ * 基於 Radix UI 的 Dialog Primitive 封裝。
+ * 負責提供無障礙且具備豐富動畫的彈窗體驗。
+ */
 "use client"
 
 import * as React from "react"
@@ -6,14 +11,16 @@ import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
+// 基礎組件導出
 const Dialog = DialogPrimitive.Root
-
 const DialogTrigger = DialogPrimitive.Trigger
-
 const DialogPortal = DialogPrimitive.Portal
-
 const DialogClose = DialogPrimitive.Close
 
+/**
+ * 遮罩層 (Overlay)
+ * 背景半透明並提供毛玻璃模糊效果。
+ */
 const DialogOverlay = React.forwardRef<
     React.ElementRef<typeof DialogPrimitive.Overlay>,
     React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
@@ -29,11 +36,16 @@ const DialogOverlay = React.forwardRef<
 ))
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 
+/**
+ * 對話框主內容層 (Content)
+ * 整合了 Overlay 與 Portal，並處理縮放、旋轉與位移的多維度動畫。
+ */
 const DialogContent = React.forwardRef<
     React.ElementRef<typeof DialogPrimitive.Content>,
     React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
 >(({ className, children, ...props }, ref) => (
     <DialogPortal>
+        {/* 渲染遮罩與彈窗主體 */}
         <DialogOverlay />
         <DialogPrimitive.Content
             ref={ref}
@@ -44,9 +56,10 @@ const DialogContent = React.forwardRef<
             {...props}
         >
             {children}
-            <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
+            {/* 右上角關閉按鈕，整合無障礙標籤 */}
+            <DialogPrimitive.Close className="interactive absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
                 <X className="h-4 w-4" />
-                <span className="sr-only">Close</span>
+                <span className="sr-only">關閉</span>
             </DialogPrimitive.Close>
         </DialogPrimitive.Content>
     </DialogPortal>
@@ -94,7 +107,7 @@ const DialogTitle = React.forwardRef<
         {...props}
     />
 ))
-DialogTitle.displayName = DialogPrimitive.Title.displayName
+DialogTitle.displayName = "DialogTitle"
 
 const DialogDescription = React.forwardRef<
     React.ElementRef<typeof DialogPrimitive.Description>,
@@ -106,7 +119,7 @@ const DialogDescription = React.forwardRef<
         {...props}
     />
 ))
-DialogDescription.displayName = DialogPrimitive.Description.displayName
+DialogDescription.displayName = "DialogDescription"
 
 export {
     Dialog,

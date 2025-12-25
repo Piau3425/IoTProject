@@ -1,0 +1,35 @@
+{
+  "penalty_settings": {
+    "enabled_platforms": [
+      "discord"
+    ],
+    "custom_messages": {},
+    "gmail_recipients": [],
+    "include_timestamp": true,
+    "include_violation_count": true,
+    "progressive_rules": [
+      {
+        "violation_count": 1,
+        "platforms": [
+          "discord"
+        ]
+      },
+      {
+        "violation_count": 2,
+        "platforms": [
+          "discord",
+          "gmail"
+        ]
+      }
+    ]
+  },
+  "penalty_config": {
+    "enable_phone_penalty": true,
+    "enable_presence_penalty": true,
+    "enable_noise_penalty": true,
+    "enable_box_open_penalty": true,
+    "noise_threshold_db": 115,
+    "noise_duration_sec": 20,
+    "presence_duration_sec": 10
+  }
+}

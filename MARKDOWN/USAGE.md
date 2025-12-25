@@ -15,6 +15,7 @@
     - **Social Settings**: 設定社交平台帳號。
 2. **右側狀態區 (Status & Monitor)**:
     - **Status Panel**: 顯示硬體連線狀態、各感測器即時狀態 (Phone, Presence, Box, Noise)。
+    - **Violation Stats**: 顯示今日累積違規次數 (Today's Violations)。
     - **Sensor Chart**: 即時繪製感測器數值波形圖。
     - **Dev Panel** (僅模擬模式): 手動控制感測器狀態。
 3. **全局覆蓋層**:

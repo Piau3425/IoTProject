@@ -1,12 +1,5 @@
 import { useEffect, RefObject } from 'react';
 import gsap from 'gsap';
-// import { EASES, ANIMATION_CONFIG } from '@/lib/animation';
-
-// interface PhysicsConfig {
-//   damping?: number;
-//   stiffness?: number;
-//   mass?: number;
-// }
 
 /**
  * Simulates a physical spring interaction for hover/active states.
@@ -43,7 +36,7 @@ export const useSpring = (
 
     const handleMouseEnter = () => {
       gsap.to(element, {
-        y: -2, // Slight lift
+        // 移除 y 位移以避免頁面抖動
         boxShadow: "0 10px 30px -10px rgba(0,0,0,0.3)",
         duration: 0.4,
         ease: "power2.out"

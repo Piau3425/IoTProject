@@ -1,5 +1,6 @@
 # Focus Enforcer v1.0 - PowerShell Launcher
 # This script starts both the backend and frontend servers
+# Version: 1.1 - Improved cleanup logic to prevent orphan processes
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
@@ -14,57 +15,119 @@ $VenvPath = Join-Path $BackendPath "venv\Scripts\Activate.ps1"
 # Global variables for cleanup
 $script:BackendJob = $null
 $script:FrontendJob = $null
+$script:CleanupCompleted = $false
 
-# Cleanup function
+# Recursive function to get all descendant processes
+function Get-ProcessDescendants {
+    param([int]$ParentId)
+    
+    $descendants = @()
+    $children = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ParentProcessId -eq $ParentId }
+    
+    foreach ($child in $children) {
+        # First get grandchildren recursively
+        $grandchildren = Get-ProcessDescendants -ParentId $child.ProcessId
+        $descendants += $grandchildren
+        # Then add the child itself (process children first, then parent)
+        $descendants += $child
+    }
+    
+    return $descendants
+}
+
+# Cleanup function - ensures all child processes are terminated
 function Stop-AllServers {
+    # Prevent multiple cleanup calls
+    if ($script:CleanupCompleted) {
+        return
+    }
+    $script:CleanupCompleted = $true
+    
     Write-Host ""
     Write-Host "============================================" -ForegroundColor Yellow
     Write-Host "  Stopping All Services..." -ForegroundColor Yellow
     Write-Host "============================================" -ForegroundColor Yellow
     Write-Host ""
     
-    # Stop Backend
-    if ($script:BackendJob -and -not $script:BackendJob.HasExited) {
-        Write-Host "[1/2] Stopping Backend (PID: $($script:BackendJob.Id))..." -ForegroundColor Yellow
+    # Stop Backend and all its descendants
+    if ($script:BackendJob) {
+        Write-Host "[1/3] Stopping Backend (PID: $($script:BackendJob.Id))..." -ForegroundColor Yellow
         
-        # Find all child processes of the PowerShell process
-        $backendChildren = Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $script:BackendJob.Id }
-        foreach ($child in $backendChildren) {
-            Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
-            Write-Host "      Stopped child process $($child.ProcessId)" -ForegroundColor Gray
+        # Get all descendant processes recursively
+        $backendDescendants = Get-ProcessDescendants -ParentId $script:BackendJob.Id
+        foreach ($descendant in $backendDescendants) {
+            try {
+                Stop-Process -Id $descendant.ProcessId -Force -ErrorAction SilentlyContinue
+                Write-Host "      Stopped descendant process $($descendant.ProcessId) ($($descendant.Name))" -ForegroundColor Gray
+            } catch { }
         }
         
         # Stop the PowerShell process itself
-        Stop-Process -Id $script:BackendJob.Id -Force -ErrorAction SilentlyContinue
+        try {
+            if (-not $script:BackendJob.HasExited) {
+                Stop-Process -Id $script:BackendJob.Id -Force -ErrorAction SilentlyContinue
+            }
+        } catch { }
         Write-Host "      Backend stopped" -ForegroundColor Green
     }
     
-    # Stop Frontend
-    if ($script:FrontendJob -and -not $script:FrontendJob.HasExited) {
-        Write-Host "[2/2] Stopping Frontend (PID: $($script:FrontendJob.Id))..." -ForegroundColor Yellow
+    # Stop Frontend and all its descendants
+    if ($script:FrontendJob) {
+        Write-Host "[2/3] Stopping Frontend (PID: $($script:FrontendJob.Id))..." -ForegroundColor Yellow
         
-        # Find all child processes of the PowerShell process
-        $frontendChildren = Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $script:FrontendJob.Id }
-        foreach ($child in $frontendChildren) {
-            Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
-            Write-Host "      Stopped child process $($child.ProcessId)" -ForegroundColor Gray
+        # Get all descendant processes recursively
+        $frontendDescendants = Get-ProcessDescendants -ParentId $script:FrontendJob.Id
+        foreach ($descendant in $frontendDescendants) {
+            try {
+                Stop-Process -Id $descendant.ProcessId -Force -ErrorAction SilentlyContinue
+                Write-Host "      Stopped descendant process $($descendant.ProcessId) ($($descendant.Name))" -ForegroundColor Gray
+            } catch { }
         }
         
         # Stop the PowerShell process itself
-        Stop-Process -Id $script:FrontendJob.Id -Force -ErrorAction SilentlyContinue
+        try {
+            if (-not $script:FrontendJob.HasExited) {
+                Stop-Process -Id $script:FrontendJob.Id -Force -ErrorAction SilentlyContinue
+            }
+        } catch { }
         Write-Host "      Frontend stopped" -ForegroundColor Green
     }
     
-    # Also kill any processes on the default ports
-    Write-Host ""
-    Write-Host "Checking for processes on ports 8000 and 5173..." -ForegroundColor Yellow
-    $connections = Get-NetTCPConnection -LocalPort 8000,5173 -ErrorAction SilentlyContinue
-    foreach ($conn in $connections) {
-        $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
-        if ($proc) {
+    # Force kill any remaining processes on the ports (safety net)
+    Write-Host "[3/3] Cleaning up port 8000 and 5173..." -ForegroundColor Yellow
+    
+    # Kill all Python processes that might be left over
+    $pythonProcs = Get-Process python* -ErrorAction SilentlyContinue
+    foreach ($proc in $pythonProcs) {
+        try {
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-            Write-Host "  Stopped process $($proc.Id) ($($proc.Name)) on port $($conn.LocalPort)" -ForegroundColor Gray
+            Write-Host "      Stopped Python process $($proc.Id)" -ForegroundColor Gray
+        } catch { }
+    }
+    
+    # Kill any node processes on port 5173
+    $connections = Get-NetTCPConnection -LocalPort 8000,5173 -ErrorAction SilentlyContinue
+    $killedPids = @{}
+    foreach ($conn in $connections) {
+        if (-not $killedPids.ContainsKey($conn.OwningProcess)) {
+            $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+            if ($proc) {
+                try {
+                    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+                    Write-Host "      Stopped process $($proc.Id) ($($proc.Name)) on port $($conn.LocalPort)" -ForegroundColor Gray
+                    $killedPids[$conn.OwningProcess] = $true
+                } catch { }
+            }
         }
+    }
+    
+    # Final verification
+    Start-Sleep -Milliseconds 500
+    $remainingConnections = Get-NetTCPConnection -LocalPort 8000,5173 -ErrorAction SilentlyContinue | Where-Object { $_.State -eq 'Listen' }
+    if ($remainingConnections) {
+        Write-Host ""
+        Write-Host "  Warning: Some processes may still be running on ports." -ForegroundColor Yellow
+        Write-Host "  Run 'Get-NetTCPConnection -LocalPort 8000,5173' to check." -ForegroundColor Yellow
     }
     
     Write-Host ""
@@ -74,9 +137,20 @@ function Stop-AllServers {
     Write-Host ""
 }
 
-# Register cleanup on Ctrl+C
-[Console]::TreatControlCAsInput = $false
-$null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action { Stop-AllServers }
+# Clean up any existing processes on the ports before starting
+Write-Host "Checking for existing processes on ports 8000 and 5173..." -ForegroundColor Gray
+$existingConnections = Get-NetTCPConnection -LocalPort 8000,5173 -ErrorAction SilentlyContinue
+if ($existingConnections) {
+    Write-Host "Found existing processes, cleaning up..." -ForegroundColor Yellow
+    foreach ($conn in $existingConnections) {
+        $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+        if ($proc) {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            Write-Host "  Stopped existing process $($proc.Id) ($($proc.Name)) on port $($conn.LocalPort)" -ForegroundColor Gray
+        }
+    }
+    Start-Sleep -Seconds 1
+}
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Green
@@ -109,25 +183,32 @@ Write-Host "  Backend:  http://localhost:8000" -ForegroundColor White
 Write-Host "  Frontend: http://localhost:5173" -ForegroundColor White
 Write-Host "  Docs:     http://localhost:8000/docs" -ForegroundColor White
 Write-Host ""
-Write-Host "  Press Ctrl+C to stop the system..." -ForegroundColor Yellow
+Write-Host "  Press Ctrl+C or close this window to stop..." -ForegroundColor Yellow
 Write-Host ""
 
-# Wait for user interrupt
+# Main loop with proper Ctrl+C handling
 try {
+    # Using a loop that's interruptible by Ctrl+C
     while ($true) {
         Start-Sleep -Seconds 1
         
         # Check if child processes are still running
-        if ($script:BackendJob.HasExited -or $script:FrontendJob.HasExited) {
+        $backendExited = $script:BackendJob.HasExited
+        $frontendExited = $script:FrontendJob.HasExited
+        
+        if ($backendExited -or $frontendExited) {
             Write-Host ""
-            Write-Host "One or more services exited unexpectedly." -ForegroundColor Red
+            if ($backendExited) {
+                Write-Host "Backend service exited unexpectedly." -ForegroundColor Red
+            }
+            if ($frontendExited) {
+                Write-Host "Frontend service exited unexpectedly." -ForegroundColor Red
+            }
             break
         }
     }
-} catch {
-    # Handle exceptions
-    Write-Host ""
-    Write-Host "Exception caught: $_" -ForegroundColor Red
-} finally {
+}
+finally {
+    # This will ALWAYS run, even on Ctrl+C
     Stop-AllServers
 }

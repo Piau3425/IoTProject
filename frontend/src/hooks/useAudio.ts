@@ -4,7 +4,7 @@ export type SoundEffect = 'start' | 'warning' | 'penalty' | 'complete'
 
 const SOUND_URLS: Record<SoundEffect, string> = {
   start: '/sounds/start.mp3',
-  warning: '/sounds/warning.mp3', 
+  warning: '/sounds/warning.mp3',
   penalty: '/sounds/penalty.mp3',
   complete: '/sounds/complete.mp3',
 }
@@ -16,7 +16,7 @@ export function useAudio() {
     penalty: null,
     complete: null,
   })
-  
+
   const attemptedLoads = useRef<Record<SoundEffect, boolean>>({
     start: false,
     warning: false,
@@ -25,9 +25,10 @@ export function useAudio() {
   })
 
   useEffect(() => {
-    // 清理函數
+    // Copy ref value for cleanup
+    const currentAudioRefs = audioRefs.current
     return () => {
-      Object.values(audioRefs.current).forEach(audio => {
+      Object.values(currentAudioRefs).forEach(audio => {
         if (audio) {
           audio.pause()
           audio.src = ''
@@ -35,44 +36,44 @@ export function useAudio() {
       })
     }
   }, [])
-  
-  // 懶載入音效：只在首次播放時才嘗試載入
+
+  // Lazy load audio: only attempt to load on first play
   const loadAudio = useCallback((effect: SoundEffect) => {
     if (audioRefs.current[effect] || attemptedLoads.current[effect]) {
-      return // 已載入或已嘗試過
+      return // Already loaded or already attempted
     }
-    
+
     attemptedLoads.current[effect] = true
     const url = SOUND_URLS[effect]
-    
-    // 靜默載入，發生錯誤也不顯示（音效是可選功能）
+
+    // Silent load, errors are acceptable (audio is optional)
     try {
       const audio = new Audio(url)
       audio.preload = 'auto'
       audio.volume = 0.7
-      
+
       audio.addEventListener('error', () => {
-        // 靜默處理錯誤 - 音效檔案不存在是可接受的
+        // Silent error handling - missing audio files are acceptable
         audioRefs.current[effect] = null
       })
-      
+
       audio.addEventListener('canplaythrough', () => {
         audioRefs.current[effect] = audio
       }, { once: true })
     } catch {
-      // 靜默處理
+      // Silent handling
     }
   }, [])
 
   const play = useCallback((effect: SoundEffect) => {
-    // 嘗試載入音效（如果尚未載入）
+    // Attempt to load audio (if not already loaded)
     loadAudio(effect)
-    
+
     const audio = audioRefs.current[effect]
     if (audio) {
       audio.currentTime = 0
       audio.play().catch(() => {
-        // 靜默處理播放錯誤
+        // Silent error handling for play failures
       })
     }
   }, [loadAudio])

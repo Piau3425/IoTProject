@@ -1,0 +1,54 @@
+[MASTER]
+# Specify a score threshold under which the program will exit with error.
+fail-under=8.0
+
+# Files or directories to be skipped.
+ignore=venv,.venv,migrations,tests
+
+[MESSAGES CONTROL]
+# Disable specific warnings
+disable=
+    # Allow CONSTANT_CASE for pydantic settings attributes
+    invalid-name,
+    # Allow import outside toplevel for lazy loading
+    import-outside-toplevel,
+    # Allow catching broad exceptions in global handlers
+    broad-exception-caught,
+    # Allow relative imports
+    wrong-import-order,
+    # Allow missing type hints in some cases
+    missing-function-docstring,
+    # Too many instance attributes is acceptable for models
+    too-many-instance-attributes,
+    # Too few public methods is acceptable for Pydantic models
+    too-few-public-methods,
+    # Duplicate code detection is too strict
+    duplicate-code
+
+[FORMAT]
+# Maximum number of characters on a single line.
+max-line-length=120
+
+# Expected format of line ending, e.g. empty (any line ending), LF or CRLF.
+expected-line-ending-format=
+
+[DESIGN]
+# Maximum number of arguments for function / method
+max-args=10
+
+# Maximum number of locals for function / method body
+max-locals=20
+
+# Maximum number of return / yield for function / method body
+max-returns=10
+
+# Maximum number of public methods for a class
+max-public-methods=30
+
+[TYPECHECK]
+# List of module names for which member attributes should not be checked
+ignored-modules=pydantic,pydantic_settings,socketio,fastapi
+
+[IMPORTS]
+# Allow any import order
+known-third-party=fastapi,pydantic,socketio,uvicorn,aiohttp,playwright

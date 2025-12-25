@@ -1,3 +1,11 @@
+/**
+ * 自定義核取方塊 (Checkbox)
+ * 基於 Radix UI 的 Checkbox Primitive 封裝。
+ * 特色：
+ * 1. 具備高質感的彈性動畫 (Luxury Easing)。
+ * 2. 懸停與點擊時具備動態縮放回饋。
+ * 3. 勾選狀態切換時觸發內部的縮放動畫 (animate-scale-in)。
+ */
 import * as React from "react"
 import * as CheckboxPrimitive from "@radix-ui/react-checkbox"
 import { Check } from "lucide-react"
@@ -16,6 +24,7 @@ const Checkbox = React.forwardRef<
     )}
     {...props}
   >
+    {/* 勾選指示器：僅在選中狀態下渲染 */}
     <CheckboxPrimitive.Indicator
       className={cn("flex items-center justify-center text-current animate-scale-in")}
     >

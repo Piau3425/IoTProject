@@ -11,9 +11,9 @@ interface MagneticButtonProps {
   href?: string
 }
 
-export const MagneticButton = ({ 
-  children, 
-  className = '', 
+export const MagneticButton = ({
+  children,
+  className = '',
   onClick,
   strength = 0.5,
   distance = 100,
@@ -25,9 +25,11 @@ export const MagneticButton = ({
   const rafId = useRef<number>()
 
   useEffect(() => {
+    // Copy ref value to local variable for cleanup
+    const currentRafId = rafId.current
     return () => {
-      if (rafId.current) {
-        cancelAnimationFrame(rafId.current)
+      if (currentRafId) {
+        cancelAnimationFrame(currentRafId)
       }
     }
   }, [])
@@ -49,7 +51,7 @@ export const MagneticButton = ({
     if (distanceFromCenter < distance) {
       // Exponential easing for more natural feel
       const intensity = Math.pow((distance - distanceFromCenter) / distance, 1.5)
-      
+
       const moveX = distanceX * strength * intensity
       const moveY = distanceY * strength * intensity
 
@@ -79,8 +81,9 @@ export const MagneticButton = ({
     })
   }
 
-  const props = {
-    ref: buttonRef as any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const props: any = {
+    ref: buttonRef,
     className,
     onClick,
     onMouseMove: handleMouseMove,
@@ -91,9 +94,9 @@ export const MagneticButton = ({
 
   return (
     <Component {...props}>
-      <div 
-        ref={magneticRef} 
-        style={{ 
+      <div
+        ref={magneticRef}
+        style={{
           display: 'inline-block',
           willChange: 'transform',
         }}

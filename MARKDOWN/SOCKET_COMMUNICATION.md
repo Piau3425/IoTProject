@@ -1,7 +1,7 @@
 # 📡 Socket.IO 通訊架構完整文件
 
 **文件版本**: 1.0  
-**最後更新**: 2025-12-22  
+**最後更新**: 2025-12-23  
 **狀態**: ✅ 已驗證可運行
 
 本文件詳細記錄 Focus Enforcer v1.0 的 Socket.IO 通訊架構，包含成功運行的配置、通訊協定、故障排除指南等完整資訊。
@@ -213,7 +213,17 @@ socket.emit('update_penalty_config', {
   enable_presence_penalty: true,
   enable_noise_penalty: false,
   enable_box_open_penalty: true,
-  noise_threshold_db: 70
+  presence_duration_sec: 10,
+  noise_duration_sec: 3
+})
+```
+
+#### 5. `update_penalty_settings`
+更新全域懲罰設定
+```typescript
+socket.emit('update_penalty_settings', {
+  enabled: true,  // 全域懲罰總開關
+  // 其他設定...
 })
 ```
 
@@ -226,15 +236,13 @@ socket.emit('toggle_mock_mode', {
 ```
 
 #### 6. `mock_sensor_update`
-（模擬模式限定）更新感測器狀態
-```typescript
-socket.emit('mock_sensor_update', {
-  sensor_type: 'phone' | 'presence' | 'box',
-  value: true | false
-})
-```
+(模擬模式限定) 透過 REST API `/api/hardware/mock/manual` 或 `/api/hardware/mock/state` 更新，不通過 Socket 事件。
+詳見 `routers/hardware.py`。
 
 ### Server → Client 事件
+
+> [!NOTE]
+> 專注歷史紀錄 (Session History) 與統計數據 (Statistics) 透過 REST API (`/api/sessions/history`, `/api/sessions/statistics`) 獲取，不使用 Socket.IO 事件。
 
 #### 1. `system_state`
 系統狀態廣播（每 200ms 或狀態變化時）
@@ -296,6 +304,40 @@ socket.emit('mock_sensor_update', {
 {
   "type": "PHONE_REMOVED" | "PRESENCE_AWAY" | "BOX_OPEN",
   "timestamp": 1703241600000
+}
+```
+
+#### 4. `hardware_state_change`
+硬體狀態機變更通知
+```json
+{
+  "previous_state": "IDLE",
+  "current_state": "PREPARING",
+  "total_focus_time_ms": 0
+}
+```
+
+#### 5. `penalty_level`
+懲罰執行事件 (僅保留 PENALTY 單一層級)
+```json
+{
+  "level": "PENALTY",
+  "count": 1,
+  "today_count": 5,
+  "reason": "Phone removed",
+  "action": "social_post"
+}
+```
+
+#### 6. `penalty_state`
+懲罰系統狀態變更通知
+```json
+{
+  "type": "penalty_executed",
+  "level": "PENALTY",
+  "violation_count": 1,
+  "today_violation_count": 5,
+  "reason": "Phone removed"
 }
 ```
 

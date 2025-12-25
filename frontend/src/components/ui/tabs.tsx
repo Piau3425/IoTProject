@@ -1,10 +1,20 @@
+/**
+ * 分頁標籤組件 (Tabs)
+ * 基於 Radix UI 的 Tabs Primitive 封裝。
+ * 負責在多個面板內容之間切換顯示。
+ */
 import * as React from "react"
 import * as TabsPrimitive from "@radix-ui/react-tabs"
 
 import { cn } from "@/lib/utils"
 
+// 基礎組件導出
 const Tabs = TabsPrimitive.Root
 
+/**
+ * 標籤列表容器 (TabsList)
+ * 負責引導標籤按鈕的水平排列佈局。
+ */
 const TabsList = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.List>,
   React.ComponentPropsWithoutRef<typeof TabsPrimitive.List>
@@ -20,6 +30,10 @@ const TabsList = React.forwardRef<
 ))
 TabsList.displayName = TabsPrimitive.List.displayName
 
+/**
+ * 標籤按鈕 (TabsTrigger)
+ * 處理選中狀態的視覺切換，並套用自定義的彈性動畫 (Luxury Easing) 與縮放效果。
+ */
 const TabsTrigger = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof TabsPrimitive.Trigger>
@@ -35,6 +49,10 @@ const TabsTrigger = React.forwardRef<
 ))
 TabsTrigger.displayName = TabsPrimitive.Trigger.displayName
 
+/**
+ * 分頁內容面板 (TabsContent)
+ * 僅在對應標籤被選中時渲染，並套用漸顯動畫 (animate-fade-in)。
+ */
 const TabsContent = React.forwardRef<
   React.ElementRef<typeof TabsPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof TabsPrimitive.Content>
