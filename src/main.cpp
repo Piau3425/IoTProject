@@ -23,7 +23,7 @@
  * │                   │ VCC        │ 5V      │ -     │ 需 5V 供電            │
  * │                   │ GND        │ GND     │ -     │                       │
  * ├──────────────────────────────────────────────────────────────────────────┤
- * │ 紅外線感測器      │ DO         │ D3      │ GPIO0 │ 中斷腳位 (CHANGE)     │
+ * │ 紅外線感測器      │ DO         │ D7      │ GPIO13│ 中斷腳位 (CHANGE)     │
  * │ (KY-033)          │ VCC        │ 3V3     │ -     │ 3.3V 供電             │
  * │                   │ GND        │ GND     │ -     │ 反射面=LOW            │
  * ├──────────────────────────────────────────────────────────────────────────┤
@@ -33,7 +33,7 @@
  * │                   │ GND        │ GND     │ -     │                       │
  * ├──────────────────────────────────────────────────────────────────────────┤
  * │ 聲音感測器        │ AO         │ A0      │ ADC0  │ 類比輸入              │
- * │ (MAX9418)         │ VCC        │ 3V3/5V  │ -     │                       │
+ * │ (MAX9814)         │ VCC        │ 3V3/5V  │ -     │                       │
  * │                   │ GND        │ GND     │ -     │                       │
  * ├──────────────────────────────────────────────────────────────────────────┤
  * │ PN532 NFC 模組    │ SDA        │ D2      │ GPIO4 │ I2C 資料線 (共用)     │
@@ -98,13 +98,13 @@ const char* WS_PATH = "/ws/hardware";
 #define PIN_I2C_SCL     D1      // GPIO5  - I2C 時脈線
 
 // KY-033 紅外線感測器 (反射式, 中斷)
-#define PIN_HALL        D3      // GPIO0  - KY-033 數位輸出 (DO) - 中斷腳位
+#define PIN_HALL        D7      // GPIO13 - KY-033 數位輸出 (DO) - 中斷腳位
 
 // LD2410 mmWave 雷達 (SoftwareSerial)
 #define PIN_RADAR_RX    D5      // GPIO14 - 雷達 TX → D1 RX
 #define PIN_RADAR_TX    D6      // GPIO12 - 雷達 RX ← D1 TX
 
-// MAX9418 聲音感測器
+// MAX9814 聲音感測器
 #define PIN_MIC         A0      // ADC0 - 類比輸入
 
 // PN532 NFC 設定 (I2C)
@@ -380,7 +380,7 @@ void initLCD() {
 //                             蓋子開啟時無反射 = HIGH (違規)
 // ============================================================================
 void initIRSensor() {
-    Serial.print(F("[IR] Initializing KY-033 IR sensor on D3 (GPIO0)..."));
+    Serial.print(F("[IR] Initializing KY-033 IR sensor on D7 (GPIO13)..."));
     
     pinMode(PIN_HALL, INPUT_PULLUP);
     
@@ -412,10 +412,10 @@ void initRadar() {
 }
 
 // ============================================================================
-// initMic() - 初始化 MAX9418 聲音感測器
+// initMic() - 初始化 MAX9814 聲音感測器
 // ============================================================================
 void initMic() {
-    Serial.print(F("[MIC] Initializing MAX9418 sound sensor on A0..."));
+    Serial.print(F("[MIC] Initializing MAX9814 sound sensor on A0..."));
     
     // ESP8266 A0 不需要特別初始化，直接 analogRead 即可
     micDb = 40;
